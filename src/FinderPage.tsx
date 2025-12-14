@@ -1,7 +1,13 @@
+// bc-normal-seed-tracking/src/FinderPage.tsx
+
 import React, { useState } from "react";
 import { Typography } from "@mui/material";
 import { generateWorkerInitializationMessage } from "./utils/seedFinder";
-import { NormalBannerData, NormalBannerPlusData } from "./utils/bannerData";
+import {
+  NormalBannerData,
+  NormalBannerPlusData,
+  LuckyTicketBannerData, // LuckyTicketBannerData를 import합니다.
+} from "./utils/bannerData";
 import FinderResults from "./FinderResults";
 
 export type WorkerMessage = {
@@ -12,7 +18,10 @@ export type WorkerMessage = {
 
 const FinderPage = () => {
   // We'll just put all our controls here because we're lazy
-  const [banner, setBanner] = useState<"normal" | "normalPlus">("normal");
+  // banner 타입에 "luckyTicket"을 추가합니다.
+  const [banner, setBanner] = useState<"normal" | "normalPlus" | "luckyTicket">(
+    "normal"
+  );
   const [userRolls, setUserRolls] = useState<(string | null)[]>(
     Array(10).fill(null)
   );
@@ -27,9 +36,11 @@ const FinderPage = () => {
     ]);
   };
 
+  // bannerObj에 LuckyTicketBannerData를 추가합니다.
   const bannerObj = {
     normal: NormalBannerData,
     normalPlus: NormalBannerPlusData,
+    luckyTicket: LuckyTicketBannerData,
   }[banner];
   const bannerPool = bannerObj.pools.flatMap((pool) => pool.units);
 
@@ -65,6 +76,7 @@ const FinderPage = () => {
 
       const workers = [];
       setProgresses(chunks.map(() => 0));
+      setSeedsFound([]);
       for (const [workerNumber, [startSeed, endSeed]] of chunks.entries()) {
         const initialMessage = {
           ...partialInitialMessage,
@@ -96,31 +108,30 @@ const FinderPage = () => {
   return (
     <>
       <Typography variant="h4">
-        BC Normal Seed Finder <a href="#credits">[Credits]</a>
+        냥코 뽑기 시드 추적기 <a href="#credits">[Credits]</a>
       </Typography>
-      <Typography variant="h6">About this tool</Typography>
+      <Typography variant="h6">이 도구에 대하여</Typography>
       <Typography variant="body1">
         <ul style={{ marginTop: 0 }}>
           <li>
-            This tool will find your normal seed by looking for a seed that
-            matches the rolls you input.
+            이 도구는 입력한 뽑기 결과와 일치하는 시드를 추적합니다.
           </li>
           <li>
-            The searching is done <strong>within the browser</strong>, meaning
-            that it will consume your device's resources.
+            검색은 <strong>브라우저 내부에서 </strong>진행되며, 이는 사용자의 기기 자원을 소모한다는 뜻입니다.
             <ul>
               <li>
-                You should expect some heavy device slowdown while the search is
-                running.
+                검색이 진행되는 동안 기기가 느려질 수 있습니다.
               </li>
             </ul>
           </li>
           <li>
-            Similar to rare ticket tracking, 8-10 rolls is required for a
-            reliable result.
+            레어뽑기 시드와 마찬가지로, 신뢰할 수 있는 결과를 얻으려면 최소 8~10회의 뽑기 정보가 필요합니다.
           </li>
           <li>
-            Looking for the actual tracker? Try <a href="#">here</a>.
+            럭키 티켓으로도 시드를 찾을 수 있습니다. 이름이 같은 아이템이 여러개 있으면 아무거나 선택하세요.
+          </li>
+          <li>
+            이미 시드를 찾으셨나요? <a href="#">여기를 클릭하세요.</a>.
           </li>
         </ul>
       </Typography>
@@ -130,13 +141,18 @@ const FinderPage = () => {
         <select
           id="banner"
           onChange={(e) => {
-            setBanner(e.target.value as "normal" | "normalPlus");
+            // 타입 캐스팅에 "luckyTicket"을 추가합니다.
+            setBanner(e.target.value as "normal" | "normalPlus" | "luckyTicket");
             setUserRolls(Array(10).fill(null));
           }}
         >
-          <option value="normal">Normal Capsules</option>
+          <option value="normal">냥코 뽑기</option>
           <option value="normalPlus">
-            Normal Capsules+ (with Superfeline)
+            냥코 뽑기+ (고양이 초인 포함)
+          </option>
+          {/* '럭키 티켓' 옵션을 추가합니다. */}
+          <option value="luckyTicket">
+            럭키 티켓
           </option>
         </select>
       </div>

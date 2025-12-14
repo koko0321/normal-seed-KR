@@ -1,4 +1,7 @@
+// bc-normal-seed-tracking/src/seedFinderWorker.js
+
 const advanceSeed = (seed) => {
+// ... (advanceSeed 함수는 동일)
   seed ^= seed << 13;
   seed = seed >>> 0; // Convert to 32bit unsigned integer
   seed ^= seed >>> 17;
@@ -8,11 +11,13 @@ const advanceSeed = (seed) => {
 };
 
 const getRarity = ({ seed, rateCumSum }) => {
+// ... (getRarity 함수는 동일)
   const seedMod = seed % 10000;
   return rateCumSum.findIndex((sum) => seedMod < sum);
 };
 
 const getUnit = ({ seed, rarity, bannerUnits, removedIndex = -1 }) => {
+// ... (getUnit 함수는 동일)
   const units = bannerUnits[rarity];
   let seedMod;
   if (removedIndex === -1) {
@@ -28,19 +33,24 @@ const getUnit = ({ seed, rarity, bannerUnits, removedIndex = -1 }) => {
 
 const check = ({
   seed,
-  rolls,
+  rolls, // rolls는 이제 유닛 인덱스 목록의 배열입니다.
   bannerRateCumSum,
   bannerUnits,
   bannerRerollablePools,
 }) => {
   let lastRoll = -1;
-  for (const userRoll of rolls) {
+  // rolls의 각 항목은 인덱스 배열입니다.
+  for (const possibleRolls of rolls) {
     seed = advanceSeed(seed);
     const rarity = getRarity({ seed, rateCumSum: bannerRateCumSum });
 
+    let currentRollMatches = false; // 현재 롤이 가능한 인덱스 중 하나와 일치하는지 플래그
+
     seed = advanceSeed(seed);
     const [unitIndex, unitId] = getUnit({ seed, rarity, bannerUnits });
+    
     if (unitId === lastRoll && bannerRerollablePools.includes(rarity)) {
+      // 듀프 트랙 스위치 로직
       seed = advanceSeed(seed);
       const [_, rerolledUnitId] = getUnit({
         seed,
@@ -48,15 +58,26 @@ const check = ({
         bannerUnits,
         removedIndex: unitIndex,
       });
-      if (userRoll !== rerolledUnitId) {
-        return false;
+      
+      // rerolledUnitId가 possibleRolls 배열에 포함되어 있는지 확인합니다.
+      if (possibleRolls.includes(rerolledUnitId)) {
+        currentRollMatches = true;
+        lastRoll = rerolledUnitId;
       }
-      lastRoll = rerolledUnitId;
+      
     } else {
-      if (userRoll !== unitId) {
-        return false;
+      // 일반 롤 로직
+      
+      // unitId가 possibleRolls 배열에 포함되어 있는지 확인합니다.
+      if (possibleRolls.includes(unitId)) {
+        currentRollMatches = true;
+        lastRoll = unitId;
       }
-      lastRoll = unitId;
+    }
+    
+    if (!currentRollMatches) {
+      // 현재 롤이 가능한 인덱스 중 어떤 것과도 일치하지 않으면 이 시드는 유효하지 않습니다.
+      return false;
     }
   }
 
@@ -64,6 +85,7 @@ const check = ({
 };
 
 const searchRange = (data) => {
+// ... (searchRange 함수는 동일)
   const {
     workerNumber,
     startSeed,

@@ -13,48 +13,44 @@ const Page = () => {
   return (
     <>
       <Typography variant="h4">
-        BC Normal Seed Tracker <a href="#credits">[Credits]</a>
+        냥코뽑기 배열 <a href="#credits">[Credits]</a>
       </Typography>
-      <Typography variant="h6">About this tool</Typography>
+      <Typography variant="h6">이 도구에 대하여</Typography>
       <ul>
         <li>
-          The{" "}
+          {" "}
           <strong>
-            normal gacha does NOT share a seed with the rare gacha.
+            냥코뽑기는 레어뽑기와 시드를 공유하지 않습니다. 
           </strong>{" "}
-          You'll need to find your seed separately.
+          각각 시드를 별도로 찾아야 합니다.
         </li>
         <ul>
           <li>
-            Looking for your seed? Try <a href="#/finder">here</a>.
+            시드를 찾고 계신가요? <a href="#/finder">여기서 찾을 수 있습니다.</a>.
           </li>
         </ul>
         <li>
-          Track switches work the exact same as rare banners. You can
-          strategically roll to hit or avoid a track switch.
+          열 이동은 레어뽑기와 동일하게 작동합니다. 전략적으로 뽑기를 해 열 이동을 유도하거나 피할 수 있습니다. 
         </li>
         <li>
-          Clicking an <strong>unit name</strong> will update your seed. Clicking{" "}
-          <strong>anywhere else in a cell</strong> will highlight your next 10
-          rolls.
+          <strong>유닛 이름</strong>을 클릭하면 시드가 업데이트됩니다.{" "}
+          <strong>셀 내부의 다른 부분</strong>을 클릭하면 다음 10번의 뽑기가 하이라이트됩니다.
+
         </li>
         <li>
-          What is <strong>100K XP (β)</strong>?
+          <strong>100,000 XP (β)</strong>는 무엇인가요?
           <ul>
             <li>
-              The Lucky Ticket G banner uses a special 100K XP item with an
-              different ID from the 100K XP used in other banners.
+              럭키 티켓 G 배너는 다른 배너에서 사용되는 것과는 다른 ID를 가진 특수한 100,000 XP 아이템을 사용합니다.
             </li>
             <li>
-              This makes no difference ingame, but means that it{" "}
+              게임 내에서는 차이가 없지만, {" "}
               <strong>
-                cannot be used to force track switches across banners
+                배너 간 열 이동을 강제로 유도하는 데에는 사용할 수 없습니다.
               </strong>
-              .
             </li>
             <li>
-              In order to distinguish between the two in the tracker, the Lucky
-              Ticket G-exclusive one is marked with (β).
+               이 추적기에서는 이를 구분하기 위해 럭키 티켓 G 전용 XP에 (β) 표시를 붙였습니다.
             </li>
           </ul>
         </li>

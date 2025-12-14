@@ -41,15 +41,15 @@ const Td = styled.td<{
   background-color: ${(props) => {
     if (
       [
-        "Cat Cannon Attack",
-        "Cat Cannon Charge",
-        "Worker Cat Rate",
-        "Worker Cat Wallet",
-        "Base Defense",
-        "Research",
-        "Accounting",
-        "Study",
-        "Cat Energy",
+        "냥코 대포 공격력",
+        "냥코 대포 충전",
+        "일 고양이의 일 효율",
+        "일 고양이의 지갑",
+        "성 체력",
+        "연구력",
+        "회계력",
+        "공부력",
+        "통솔력",
       ].includes(props.unitName || "")
     ) {
       return "#c9e4ff";
