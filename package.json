@@ -4,8 +4,8 @@
   "description": "React + Typescript + eslint + prettier template",
   "main": "src/index.tsx",
   "scripts": {
-    "build": "rm -rf docs && npm run typecheck && webpack --mode production && mv dist docs",
-    "dev": "NODE_ENV=development webpack serve",
+    "build": "cross-env NODE_ENV=production NODE_OPTIONS=--openssl-legacy-provider webpack",
+    "dev": "cross-env NODE_OPTIONS=--openssl-legacy-provider NODE_ENV=development webpack serve",
     "typecheck": "tsc -p . --noEmit"
   },
   "author": "ragnar1904",
@@ -23,6 +23,7 @@
     "@types/react-dom": "^17.0.9",
     "@typescript-eslint/eslint-plugin": "^4.29.0",
     "@typescript-eslint/parser": "^4.29.0",
+    "cross-env": "^7.0.3", 
     "eslint": "^7.32.0",
     "eslint-config-prettier": "^8.3.0",
     "eslint-plugin-prettier": "^3.4.0",
