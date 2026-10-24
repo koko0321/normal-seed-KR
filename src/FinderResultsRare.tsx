@@ -38,6 +38,7 @@ const FinderResultsRare = ({
   isSearching,
   bannerData,
   numPulls,
+  firstRoll,
 }: {
   guaranteed: boolean;
   workerProgresses: number[];
@@ -45,6 +46,7 @@ const FinderResultsRare = ({
   isSearching: boolean;
   bannerData: BannerData;
   numPulls: number;
+  firstRoll?: string;
 }) => {
   if (seedsFound.length > 200) {
     seedsFound = seedsFound.slice(0, 200);
@@ -52,7 +54,7 @@ const FinderResultsRare = ({
 
   return isSearching ? (
     <div>
-      <Typography variant="body1">Searching...</Typography>
+      <Typography variant="body1">검색 중...</Typography>
       {workerProgresses.map((progress, i) => {
         return (
           <RowContainer>
@@ -71,62 +73,56 @@ const FinderResultsRare = ({
       {seedsFound.length > 0 ? (
         <>
           <Typography variant="body1">
-            Notes:
+            참고:
             <ul>
               <li>
-                If there are multiple seeds found, only one will be correct, you
-                can pull some more and check the tracks to confirm which one it
-                is.
+                여러 개의 시드가 발견되면 그중 하나만 정답입니다. 몇 번 더 뽑은
+                뒤 열을 확인해서 어느 것이 맞는지 확인할 수 있습니다.
               </li>
               <li>
-                It's also possible that none of the seeds are correct due to a
-                dupe.
+                중복(dupe) 때문에 발견된 시드가 모두 틀렸을 수도 있습니다.
                 <ul>
-                  <li>
-                    In that case you can just remove the first cat and try
-                    again.
-                  </li>
+                  <li>그런 경우 첫 번째 고양이를 빼고 다시 시도하세요.</li>
                 </ul>
               </li>
             </ul>
             <br />
-            Found a total of {seedsFound.length} seed
-            {seedsFound.length > 1 && "s"} matching your rolls.{" "}
+            입력한 뽑기 결과와 일치하는 시드를 총 {seedsFound.length}개
+            찾았습니다.{" "}
           </Typography>
           <UlWithStrong>
             {seedsFound.map((seed, i) => {
               const [seedAfterRolls, nextRollIsReroll] =
-                generateRollsLightweight(seed, numPulls, bannerData);
+                generateRollsLightweight(seed, numPulls, bannerData, firstRoll);
               return (
                 <li>
-                  <strong>Seed {i + 1}</strong>
+                  <strong>시드 {i + 1}</strong>
                   <ul>
                     <li style={{ color: "#777777" }}>
-                      <strong>Before</strong> doing the {numPulls} pulls: {seed}
+                      {numPulls}회 뽑기 <strong>전</strong>: {seed}
                     </li>
                     <li style={guaranteed ? { color: "#777777" } : {}}>
-                      <strong>After</strong> doing the {numPulls} pulls:{" "}
+                      {numPulls}회 뽑기 <strong>후</strong>:{" "}
                       {seedAfterRolls}
                     </li>
                     {guaranteed && (
                       <li>
-                        <strong>After track switching</strong> due to the
-                        guarantee: {advanceSeed(seedAfterRolls)}
+                        확정 뽑기로 인한 <strong>열 이동 후</strong>: {advanceSeed(seedAfterRolls)}
                       </li>
                     )}
                     {!guaranteed && nextRollIsReroll && (
                       <li>
-                        <strong>Important:</strong> For this seed, the next roll
-                        is detected to be a <i>dupe track switch</i>.
+                        <strong>중요:</strong> 이 시드에서는 다음 뽑기가{" "}
+                        <i>중복 열 이동</i>으로 감지되었습니다.
                         <ul>
                           <li>
-                            The tracker <i>will not account for this</i> if you
-                            just use the <strong>After</strong> seed, so it will
-                            incorrectly show you proceeding along track A.
+                            <strong>후</strong> 시드를 그대로 사용하면 추적기가
+                            이를 <i>반영하지 않으므로</i>, A열을 계속
+                            진행하는 것처럼 잘못 표시됩니다.
                           </li>
                           <li>
-                            Instead, you should use the <strong>Before</strong>{" "}
-                            seed and update your seed manually.
+                            대신 <strong>전</strong> 시드를 사용해서 시드를
+                            직접 업데이트하세요.
                           </li>
                         </ul>
                       </li>
@@ -139,8 +135,8 @@ const FinderResultsRare = ({
         </>
       ) : (
         <Typography variant="body1">
-          Couldn't find your seed. This could be because of a dupe - please
-          remove the first cat and try again.
+          시드를 찾지 못했습니다. 중복(dupe) 때문일 수 있습니다. 첫 번째
+          고양이를 빼고 다시 시도해 주세요.
         </Typography>
       )}
     </div>

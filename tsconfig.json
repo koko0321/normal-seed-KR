@@ -1,22 +1,12 @@
 {
   "compilerOptions": {
-    "target": "es2020",         // 💡 ES2020으로 업데이트 (flatMap 등 최신 문법 지원)
-    "module": "esnext",          // 💡 ESNext로 업데이트 (import.meta 지원)
-    "lib": ["dom", "dom.iterable", "es2020"], // 💡 환경 API 명시
-    "jsx": "react",
-    "strict": false,            // TS7006 오류를 잠시 끄기 위해 'false'로 설정
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
+    "target": "es2019",
+    "module": "esnext",
     "moduleResolution": "node",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "outDir": "./dist",
-    "sourceMap": true,
-    "noImplicitAny": false      // TS7006 오류를 잠시 끄기 위해 'false'로 설정
-  },
-  
-  "exclude": ["node_modules"],  // 이미 추가했음 (TS1005 오류 해결에 도움)
-  
-  "include": ["src/**/*"]
+    "jsx": "react",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  }
 }

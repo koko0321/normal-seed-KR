@@ -77,15 +77,20 @@ const getUnit = ({
 };
 
 // A lightweight version of generateRolls that returns only the final seed
-// Should only be used on banners without multiple dupe rares in the pool, like Normal and Normal+
+// firstRoll is the user's first input, used to detect that it was itself a
+// dupe reroll (the pull before it is unknown). Must match seedFinderWorker.js.
+// Also returns which unit the first roll was a dupe of ("" if it wasn't), which
+// is the last roll the tracker needs for the starting seed.
 export const generateRollsLightweight = (
   seed: number,
   numRolls: number,
-  banner: BannerData
-): [number, boolean] => {
+  banner: BannerData,
+  firstRoll?: string
+): [number, boolean, string] => {
   let lastRoll = "";
   let finalRollSeed = 0;
   let finalRollIsReroll = false;
+  let firstRollDupeOf = "";
   // Roll to numRolls + 1 to check if the next one is a rare dupe, but return the seed at numRolls
   for (let i = 0; i < numRolls + 1; i++) {
     if (i === numRolls) {
@@ -99,23 +104,35 @@ export const generateRollsLightweight = (
       seed,
       units: banner.pools[rarity].units,
     });
+    if (i === 0 && firstRoll !== undefined && unitName !== firstRoll) {
+      lastRoll = unitName;
+      firstRollDupeOf = unitName;
+    }
     if (unitName === lastRoll && banner.pools[rarity].reroll) {
       if (i === numRolls) {
         finalRollIsReroll = true;
       }
-      seed = advanceSeed(seed);
-      const [_, rerolledUnitName] = getUnit({
-        seed,
-        units: banner.pools[rarity].units,
-        removedIndices: [unitId],
-      });
+      // Pools like Lucky Ticket repeat items, so keep rerolling until the
+      // item actually differs
+      const removedIndices = [unitId];
+      let rerolledUnitName = unitName;
+      while (rerolledUnitName === unitName) {
+        seed = advanceSeed(seed);
+        const [nextUnitId, nextUnitName] = getUnit({
+          seed,
+          units: banner.pools[rarity].units,
+          removedIndices,
+        });
+        rerolledUnitName = nextUnitName;
+        removedIndices.push(nextUnitId);
+      }
       lastRoll = rerolledUnitName;
     } else {
       lastRoll = unitName;
     }
   }
 
-  return [finalRollSeed, finalRollIsReroll];
+  return [finalRollSeed, finalRollIsReroll, firstRollDupeOf];
 };
 
 const generateRolls = (seed: number, numRolls: number, banner: BannerData) => {

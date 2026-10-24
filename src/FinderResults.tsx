@@ -3,10 +3,19 @@ import { Typography } from "@mui/material";
 import React from "react";
 import { BannerData } from "./utils/bannerData";
 import { generateRollsLightweight } from "./utils/seed";
+import { getQueryParam } from "./utils/queryParams";
 
-const getTrackUrlWithSeedQueryParam = (seed: number) => {
+// Links to the tracker with the seed, its last roll (so 1A dupes show up) and
+// the searched banner switched on
+const getTrackUrl = (seed: number, lastCat: string, bannerShortName: string) => {
   const queryParams = new URLSearchParams(window.location.search);
   queryParams.set("seed", seed.toString());
+  queryParams.set("lastCat", lastCat);
+  queryParams.delete("selected");
+  const banners = getQueryParam("banners").split(",");
+  if (!banners.includes(bannerShortName)) {
+    queryParams.set("banners", [...banners, bannerShortName].sort().join(","));
+  }
   return `?${queryParams.toString()}#`;
 };
 
@@ -43,19 +52,23 @@ const FinderResults = ({
   isSearching,
   bannerData,
   numPulls,
+  firstRoll,
+  lastRoll,
 }: {
   workerProgresses: number[];
   seedsFound: number[];
   isSearching: boolean;
   bannerData: BannerData;
   numPulls: number;
+  firstRoll?: string;
+  lastRoll?: string;
 }) => {
   if (seedsFound.length > 200) {
     seedsFound = seedsFound.slice(0, 200);
   }
   return isSearching ? (
     <div>
-      <Typography variant="body1">Searching...</Typography>
+      <Typography variant="body1">검색 중...</Typography>
       {workerProgresses.map((progress, i) => {
         return (
           <RowContainer>
@@ -74,61 +87,62 @@ const FinderResults = ({
       {seedsFound.length > 0 ? (
         <>
           <Typography variant="body1">
-            Notes:
+            참고:
             <ul>
               <li>
-                If there are multiple seeds found, only one will be correct, you
-                can pull some more and check the tracks to confirm which one it
-                is.
+                여러 개의 시드가 발견되면 그중 하나만 정답입니다. 몇 번 더 뽑은
+                뒤 열을 확인해서 어느 것이 맞는지 확인할 수 있습니다.
               </li>
               <li>
-                It's also possible that none of the seeds are correct due to a
-                dupe.
+                중복(dupe) 때문에 발견된 시드가 모두 틀렸을 수도 있습니다.
                 <ul>
-                  <li>
-                    In that case you can just remove the first cat and try
-                    again.
-                  </li>
+                  <li>그런 경우 첫 번째 고양이를 빼고 다시 시도하세요.</li>
                 </ul>
               </li>
             </ul>
             <br />
-            Found a total of {seedsFound.length} seed
-            {seedsFound.length > 1 && "s"} matching your rolls.{" "}
+            입력한 뽑기 결과와 일치하는 시드를 총 {seedsFound.length}개
+            찾았습니다.{" "}
           </Typography>
           <UlWithStrong>
             {seedsFound.map((seed, i) => {
-              const [seedAfterRolls, nextRollIsReroll] =
-                generateRollsLightweight(seed, numPulls, bannerData);
+              const [seedAfterRolls, nextRollIsReroll, firstRollDupeOf] =
+                generateRollsLightweight(seed, numPulls, bannerData, firstRoll);
               return (
                 <li>
-                  <strong>Seed {i + 1}</strong>
+                  <strong>시드 {i + 1}</strong>
                   <ul>
                     <li>
-                      <strong>Before</strong> doing the {numPulls} pulls:{" "}
-                      <a href={getTrackUrlWithSeedQueryParam(seed)}>{seed}</a>
+                      {numPulls}회 뽑기 <strong>전</strong>:{" "}
+                      <a
+                        href={getTrackUrl(
+                          seed,
+                          firstRollDupeOf,
+                          bannerData.shortName
+                        )}
+                      >
+                        {seed}
+                      </a>
                     </li>
                     <li>
-                      <strong>After</strong> doing the {numPulls} pulls:{" "}
-                      <a href={getTrackUrlWithSeedQueryParam(seedAfterRolls)}>
+                      {numPulls}회 뽑기 <strong>후</strong>:{" "}
+                      <a
+                        href={getTrackUrl(
+                          seedAfterRolls,
+                          lastRoll || "",
+                          bannerData.shortName
+                        )}
+                      >
                         {seedAfterRolls}
                       </a>
                     </li>
                     {nextRollIsReroll && (
                       <li>
-                        <strong>Important:</strong> For this seed, the next roll
-                        is detected to be a <i>dupe track switch</i>.
-                        <ul>
-                          <li>
-                            The tracker <i>doesn't account for this</i> if you
-                            use the <strong>After</strong> link, so it will
-                            incorrectly show you proceeding along track A.
-                          </li>
-                          <li>
-                            Instead, you should use the <strong>Before</strong>{" "}
-                            link and update your seed manually.
-                          </li>
-                        </ul>
+                        <strong>참고:</strong> 이 시드에서는 다음 뽑기가{" "}
+                        <i>중복 열 이동</i>입니다.{" "}
+                        <strong>후</strong> 링크에는 마지막 뽑기가 설정되어
+                        있어서, 추적기의 1A에 중복 재추첨이 반영되어
+                        표시됩니다.
                       </li>
                     )}
                   </ul>
@@ -139,8 +153,8 @@ const FinderResults = ({
         </>
       ) : (
         <Typography variant="body1">
-          Couldn't find your seed. This could be because of a dupe - please
-          remove the first cat and try again.
+          시드를 찾지 못했습니다. 중복(dupe) 때문일 수 있습니다. 첫 번째
+          고양이를 빼고 다시 시도해 주세요.
         </Typography>
       )}
     </div>

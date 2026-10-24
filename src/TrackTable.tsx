@@ -3,6 +3,7 @@ import { BannerTrackRolls } from "./RollTable";
 import styled from "@emotion/styled";
 import { Roll } from "./utils/seed";
 import { getQueryParam, setQueryParam } from "./utils/queryParams";
+import { bannerKo, unitKo } from "./utils/i18n";
 
 const zip = (arr: any[]) =>
   Array(Math.min(...arr.map((a) => a.length)))
@@ -41,15 +42,15 @@ const Td = styled.td<{
   background-color: ${(props) => {
     if (
       [
-        "냥코 대포 공격력",
-        "냥코 대포 충전",
-        "일 고양이의 일 효율",
-        "일 고양이의 지갑",
-        "성 체력",
-        "연구력",
-        "회계력",
-        "공부력",
-        "통솔력",
+        "Cat Cannon Attack",
+        "Cat Cannon Charge",
+        "Worker Cat Rate",
+        "Worker Cat Wallet",
+        "Base Defense",
+        "Research",
+        "Accounting",
+        "Study",
+        "Cat Energy",
       ].includes(props.unitName || "")
     ) {
       return "#c9e4ff";
@@ -97,7 +98,7 @@ const TrackTable = ({
         <tr>
           <Th>#</Th>
           {rolls.map((roll) => (
-            <Th key={roll.bannerName}>{roll.bannerName}</Th>
+            <Th key={roll.bannerName}>{bannerKo(roll.bannerName)}</Th>
           ))}
         </tr>
       </thead>
@@ -148,7 +149,7 @@ const TrackTable = ({
                     >
                       {unit.dupeInfo?.showDupe ? (
                         <a href={canonicalDestination}>
-                          {unit.unitIfDistinct.unitName}
+                          {unitKo(unit.unitIfDistinct.unitName)}
                         </a>
                       ) : (
                         "\u00A0"
@@ -182,12 +183,12 @@ const TrackTable = ({
 
                   const rerollDestinationText =
                     track === "A"
-                      ? `${unit.unitIfDupe?.unitName} -> ${
+                      ? `${unitKo(unit.unitIfDupe?.unitName)} -> ${
                           unit.dupeInfo?.targetCellId
                         }${unit.dupeInfo?.targetWillRerollAgain ? "R" : ""}`
                       : `<- ${unit.dupeInfo?.targetCellId}${
                           unit.dupeInfo?.targetWillRerollAgain ? "R" : ""
-                        } ${unit.unitIfDupe?.unitName}`;
+                        } ${unitKo(unit.unitIfDupe?.unitName)}`;
                   return (
                     <BottomTd
                       key={j}
@@ -219,7 +220,7 @@ const TrackTable = ({
                         <a href={rerollDestination}>{rerollDestinationText}</a>
                       ) : (
                         <a href={canonicalDestination}>
-                          {unit.unitIfDistinct.unitName}
+                          {unitKo(unit.unitIfDistinct.unitName)}
                         </a>
                       )}
                     </BottomTd>
