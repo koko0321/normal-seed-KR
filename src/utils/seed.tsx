@@ -28,6 +28,11 @@ export type Roll = {
     top: boolean;
     bottom: boolean;
   };
+  // Outline color for the half of the cell showing an item picked in "find"
+  found?: {
+    top?: string;
+    bottom?: string;
+  };
 };
 
 export const advanceSeed = (seed: number) => {

@@ -3,6 +3,8 @@ import { Roll, advanceSeed, generateAllRolls } from "./utils/seed";
 import TrackTable from "./TrackTable";
 import styled from "@emotion/styled";
 import { getQueryParam } from "./utils/queryParams";
+import { AllBanners } from "./utils/bannerData";
+import { bannerKo, unitKo } from "./utils/i18n";
 
 export type BannerTrackRolls = {
   bannerName: string;
@@ -10,9 +12,55 @@ export type BannerTrackRolls = {
   track: Roll[];
 };
 
+type FoundPosition = {
+  sequence: number;
+  trackLetter: "A" | "B";
+  label: string;
+};
+
+// Items picked in "find", in the order they were added
+export const getFindUnits = () =>
+  getQueryParam("find").split(",").filter(Boolean);
+
+// Each picked item gets its own outline color, avoiding the rarity colors
+const FIND_COLORS = ["#8e24aa", "#1565c0", "#2e7d32", "#ef6c00", "#c2185b"];
+export const findColor = (findIndex: number) =>
+  FIND_COLORS[findIndex % FIND_COLORS.length];
+
+export const cellElementId = (bannerShortName: string, cellId: string) =>
+  `cell-${bannerShortName}-${cellId}`;
+
 const Container = styled.div`
   display: flex;
   flex-direction: row;
+`;
+
+const FindList = styled.ul`
+  margin-bottom: 8px;
+  li {
+    margin-bottom: 4px;
+  }
+  strong {
+    font-weight: bold;
+  }
+`;
+
+export const Swatch = styled.span<{ color: string }>`
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border: 3px solid ${(props) => props.color};
+  vertical-align: middle;
+`;
+
+const PositionLink = styled.button`
+  padding: 0;
+  border: none;
+  background: none;
+  color: #0000ee;
+  text-decoration: underline;
+  cursor: pointer;
 `;
 
 const RollTable = () => {
@@ -142,6 +190,51 @@ const RollTable = () => {
     }
   }
 
+  // Find every position of the items picked in "find" within numRolls, and
+  // mark the half of the cell that shows it
+  const findResults = getFindUnits().map((unitName, findIndex) => {
+    const color = findColor(findIndex);
+    const banners = allRolls
+      .filter(({ bannerShortName }) =>
+        AllBanners.find(
+          (banner) => banner.shortName === bannerShortName
+        )?.pools.some((pool) => pool.units.includes(unitName))
+      )
+      .map(({ bannerName, bannerShortName, trackA, trackB }) => {
+        const positions: FoundPosition[] = [];
+        const scanTrack = (track: Roll[], trackLetter: "A" | "B") => {
+          track.slice(0, numRolls).forEach((roll, i) => {
+            const cellId = `${i + 1}${trackLetter}`;
+            const showDupe = roll.dupeInfo?.showDupe;
+            if (roll.unitIfDistinct.unitName === unitName) {
+              roll.found = {
+                ...roll.found,
+                [showDupe ? "top" : "bottom"]: color,
+              };
+              positions.push({ sequence: i + 1, trackLetter, label: cellId });
+            }
+            if (showDupe && roll.unitIfDupe?.unitName === unitName) {
+              roll.found = { ...roll.found, bottom: color };
+              positions.push({
+                sequence: i + 1,
+                trackLetter,
+                label: `${cellId}R`,
+              });
+            }
+          });
+        };
+        scanTrack(trackA, "A");
+        scanTrack(trackB, "B");
+        positions.sort(
+          (a, b) =>
+            a.sequence - b.sequence ||
+            a.trackLetter.localeCompare(b.trackLetter)
+        );
+        return { bannerName, bannerShortName, positions };
+      });
+    return { unitName, color, banners };
+  });
+
   const trackARolls = allRolls.map((roll) => ({
     bannerName: roll.bannerName,
     bannerShortName: roll.bannerShortName,
@@ -153,10 +246,55 @@ const RollTable = () => {
     track: roll.trackB.slice(0, numRolls),
   }));
   return (
-    <Container>
-      <TrackTable rolls={trackARolls} track={"A"} />
-      <TrackTable rolls={trackBRolls} track={"B"} />
-    </Container>
+    <>
+      {findResults.length > 0 && (
+        <FindList>
+          {findResults.map(({ unitName, color, banners }) => (
+            <li key={unitName}>
+              <Swatch color={color} />
+              <strong>{unitKo(unitName)}</strong>
+              {banners.length === 0 && " — 선택한 배너에 없는 아이템입니다."}
+              {banners.map(({ bannerName, bannerShortName, positions }) => (
+                <div key={bannerShortName}>
+                  {bannerKo(bannerName)} · {positions.length}회
+                  {positions.length === 0
+                    ? ` — ${numRolls}번 안에 없습니다.`
+                    : ": "}
+                  {positions.map(({ label }, i) => (
+                    <React.Fragment key={label}>
+                      {i > 0 && ", "}
+                      <PositionLink
+                        type="button"
+                        onClick={() =>
+                          document
+                            .getElementById(
+                              cellElementId(
+                                bannerShortName,
+                                label.replace("R", "")
+                              )
+                            )
+                            ?.scrollIntoView({ block: "center" })
+                        }
+                      >
+                        {label}
+                      </PositionLink>
+                    </React.Fragment>
+                  ))}
+                </div>
+              ))}
+            </li>
+          ))}
+          <li style={{ listStyle: "none", color: "#555" }}>
+            R은 직전 뽑기와 중복되어 재추첨될 때 나오는 경우입니다. 위치를
+            클릭하면 해당 칸으로 이동합니다.
+          </li>
+        </FindList>
+      )}
+      <Container>
+        <TrackTable rolls={trackARolls} track={"A"} />
+        <TrackTable rolls={trackBRolls} track={"B"} />
+      </Container>
+    </>
   );
 };
 

@@ -4,6 +4,7 @@ const DEFAULTS = {
   rolls: "100",
   lastCat: "",
   selected: "",
+  find: "",
 };
 
 export const getQueryParam = (key: keyof typeof DEFAULTS): string => {

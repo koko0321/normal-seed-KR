@@ -1,5 +1,5 @@
 import React from "react";
-import { BannerTrackRolls } from "./RollTable";
+import { BannerTrackRolls, cellElementId } from "./RollTable";
 import styled from "@emotion/styled";
 import { Roll } from "./utils/seed";
 import { getQueryParam, setQueryParam } from "./utils/queryParams";
@@ -25,10 +25,15 @@ const Td = styled.td<{
   unitName?: string;
   highlight?: boolean;
   isLastHighlighted?: boolean;
+  foundColor?: string;
 }>`
   white-space: nowrap;
   border: 1px solid black;
   text-align: center;
+
+  ${(props) =>
+    props.foundColor &&
+    `box-shadow: inset 0 0 0 3px ${props.foundColor}; font-weight: bold;`}
 
   background-image: ${(props) => {
     if (props.highlight) {
@@ -129,6 +134,8 @@ const TrackTable = ({
                   return (
                     <TopTd
                       key={j}
+                      id={cellElementId(rolls[j].bannerShortName, `${i + 1}${track}`)}
+                      foundColor={unit.found?.top}
                       rarity={unit.rarity}
                       unitName={unit.unitIfDistinct.unitName}
                       onClick={(e) => {
@@ -192,6 +199,7 @@ const TrackTable = ({
                   return (
                     <BottomTd
                       key={j}
+                      foundColor={unit.found?.bottom}
                       rarity={unit.rarity}
                       unitName={
                         unit.dupeInfo?.showDupe

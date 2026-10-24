@@ -1,10 +1,25 @@
 import React, { useState } from "react";
-import RollTable from "./RollTable";
+import RollTable, { Swatch, findColor, getFindUnits } from "./RollTable";
 import styled from "@emotion/styled";
 import { Typography } from "@mui/material";
 import { getQueryParam, setQueryParam } from "./utils/queryParams";
 import { AllBanners } from "./utils/bannerData";
 import { bannerKo, unitKo } from "./utils/i18n";
+
+const FindChip = styled.span`
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 2px 1px 6px;
+  border: 1px solid #999;
+  border-radius: 12px;
+  button {
+    padding: 0 4px;
+    border: none;
+    background: none;
+    cursor: pointer;
+  }
+`;
 
 const Page = () => {
   // We'll just put all our controls here because we're lazy
@@ -27,6 +42,27 @@ const Page = () => {
             return false;
           }
           lastRollUnits.add(unit);
+          return true;
+        });
+      return { bannerName: banner.name, units };
+    })
+    .filter(({ units }) => units.length > 0);
+
+  // Any item of the selected banners can be searched for, except ones
+  // already picked. Each unit is listed once.
+  const findUnits = getFindUnits();
+  const listedFindUnits = new Set<string>(findUnits);
+  const findGroups = AllBanners.filter((banner) =>
+    selectedBanners.includes(banner.shortName)
+  )
+    .map((banner) => {
+      const units = banner.pools
+        .flatMap((pool) => pool.units)
+        .filter((unit) => {
+          if (listedFindUnits.has(unit)) {
+            return false;
+          }
+          listedFindUnits.add(unit);
           return true;
         });
       return { bannerName: banner.name, units };
@@ -69,6 +105,11 @@ const Page = () => {
               모르거나 목록에 없는 아이템이면 비워두면 됩니다.
             </li>
           </ul>
+        </li>
+        <li>
+          <strong>아이템 찾기</strong>에서 아이템을 고르면 뽑기 횟수 안에서 그
+          아이템이 나오는 칸을 모두 표시합니다. 여러 개를 동시에 고를 수
+          있습니다.
         </li>
         <li>
           <strong>100,000 XP (β)</strong>는 무엇인가요?
@@ -139,7 +180,7 @@ const Page = () => {
           style={{ marginRight: "4px" }}
           onChange={(event) => setQueryParam("rolls", event.target.value)}
         >
-          {[100, 200, 500, 999].map((numRolls) => (
+          {[100, 200, 300, 500, 999].map((numRolls) => (
             <option
               value={numRolls}
               selected={getQueryParam("rolls") === numRolls.toString()}
@@ -177,6 +218,61 @@ const Page = () => {
             </label>
           );
         })}
+      </div>
+      <Typography variant="subtitle2" style={{ marginTop: "4px" }}>
+        아이템 찾기
+      </Typography>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "6px",
+          marginBottom: "4px",
+        }}
+      >
+        <select
+          style={{ maxWidth: "300px" }}
+          onChange={(event) => {
+            if (event.target.value) {
+              setQueryParam("find", [...findUnits, event.target.value].join(","));
+            }
+          }}
+        >
+          <option value="">-- 찾을 아이템 추가 --</option>
+          {findGroups.map(({ bannerName, units }) => (
+            <optgroup key={bannerName} label={bannerKo(bannerName)}>
+              {units.map((unit) => (
+                <option key={unit} value={unit}>
+                  {unitKo(unit)}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        {findUnits.map((unit, findIndex) => (
+          <FindChip key={unit}>
+            <Swatch color={findColor(findIndex)} />
+            {unitKo(unit)}
+            <button
+              type="button"
+              title="빼기"
+              onClick={() =>
+                setQueryParam(
+                  "find",
+                  findUnits.filter((findUnit) => findUnit !== unit).join(",")
+                )
+              }
+            >
+              ×
+            </button>
+          </FindChip>
+        ))}
+        {findUnits.length > 1 && (
+          <button type="button" onClick={() => setQueryParam("find", "")}>
+            모두 지우기
+          </button>
+        )}
       </div>
       <Typography variant="body1">&nbsp;</Typography>
       <RollTable />
