@@ -1,248 +1,373 @@
-import React from "react";
-import { BannerTrackRolls, cellElementId } from "./RollTable";
+import React, { useMemo } from "react";
+import { BannerTrackRolls, FOUND_FILL, cellElementId } from "./RollTable";
 import styled from "@emotion/styled";
 import { Roll } from "./utils/seed";
-import { getQueryParam, setQueryParam } from "./utils/queryParams";
 import { bannerKo, unitKo } from "./utils/i18n";
+import { BLUE_ORBS, PATH_COLOR } from "./utils/normalPathFinder";
 
-const zip = (arr: any[]) =>
-  Array(Math.min(...arr.map((a) => a.length)))
-    .fill(0)
-    .map((_, i) => arr.map((a) => a[i]));
+const BLUE_ORB_SET = new Set<string>(BLUE_ORBS);
+
+const zip = (arr: Roll[][]): Roll[][] => {
+  if (arr.length === 0) {
+    return [];
+  }
+  const len = Math.min(...arr.map((a) => a.length));
+  const out: Roll[][] = new Array(len);
+  for (let i = 0; i < len; i++) {
+    const row: Roll[] = new Array(arr.length);
+    for (let j = 0; j < arr.length; j++) {
+      row[j] = arr[j][i];
+    }
+    out[i] = row;
+  }
+  return out;
+};
 
 const Table = styled.table`
   border-collapse: collapse;
+  th {
+    border: 1px solid black;
+    text-align: center;
+    font-weight: bold;
+  }
+  td {
+    white-space: nowrap;
+    border: 1px solid black;
+    text-align: center;
+    cursor: pointer;
+    padding: 0 8px;
+    background-color: #eeeeee;
+  }
+  td.r-num {
+    cursor: default;
+  }
+  td.spacer {
+    cursor: default;
+    background-color: #ffffff;
+  }
+  td.t {
+    border-bottom: none;
+  }
+  td.b {
+    border-top: none;
+  }
+  span.p-badge {
+    display: inline-block;
+    min-width: 14px;
+    margin-right: 3px;
+    padding: 0 2px;
+    border-radius: 7px;
+    background: ${PATH_COLOR};
+    color: white;
+    font-size: 11px;
+    line-height: 14px;
+  }
 `;
 
-const Th = styled.th`
-  border: 1px solid black;
-  text-align: center;
-  font-weight: bold;
-`;
+const STATIC_BG_STYLES: Record<string, React.CSSProperties | undefined> = {
+  "#FFFFFF": { backgroundColor: "#FFFFFF" },
+  "#EEEEEE": undefined,
+  "#c9e4ff": { backgroundColor: "#c9e4ff" },
+  gold: { backgroundColor: "gold" },
+  red: { backgroundColor: "red" },
+  aqua: { backgroundColor: "aqua" },
+};
 
-const Td = styled.td<{
-  rarity: number;
-  unitName?: string;
-  highlight?: boolean;
-  isLastHighlighted?: boolean;
-  foundColor?: string;
-}>`
-  white-space: nowrap;
-  border: 1px solid black;
-  text-align: center;
+const getBgColor = (
+  rarity: number,
+  unitName?: string,
+  foundColor?: string
+): string => {
+  if (foundColor) {
+    return FOUND_FILL;
+  }
+  if (unitName && BLUE_ORB_SET.has(unitName)) {
+    return "#c9e4ff";
+  }
+  switch (rarity) {
+    case 0:
+      return "#FFFFFF";
+    case 1:
+      return "#EEEEEE";
+    case 2:
+      return "gold";
+    case 3:
+      return "red";
+    case 4:
+      return "aqua";
+    default:
+      return "#EEEEEE";
+  }
+};
 
-  ${(props) =>
-    props.foundColor &&
-    `box-shadow: inset 0 0 0 3px ${props.foundColor}; font-weight: bold;`}
+const getCellStyle = (
+  rarity: number,
+  unitName: string | undefined,
+  highlight: boolean | undefined,
+  isLastHighlighted: boolean | undefined,
+  foundColor: string | undefined,
+  pathStep: number | undefined
+): React.CSSProperties | undefined => {
+  const bg = getBgColor(rarity, unitName, foundColor);
+  if (!foundColor && !pathStep && !highlight) {
+    return STATIC_BG_STYLES[bg];
+  }
+  const style: React.CSSProperties = {
+    backgroundColor: bg,
+  };
+  if (foundColor) {
+    style.boxShadow = `inset 0 0 0 3px ${foundColor}`;
+    style.fontWeight = "bold";
+  }
+  if (pathStep) {
+    style.outline = `3px solid ${PATH_COLOR}`;
+    style.outlineOffset = "-3px";
+    style.fontWeight = "bold";
+  }
+  if (highlight) {
+    style.backgroundImage = isLastHighlighted
+      ? "repeating-linear-gradient(90deg, #00000075 5px, #00000075 15px, #00000050 15px, #00000050 25px)"
+      : "linear-gradient(#00000050, #00000050)";
+  }
+  return style;
+};
 
-  background-image: ${(props) => {
-    if (props.highlight) {
-      if (props.isLastHighlighted) {
-        return "repeating-linear-gradient(90deg, #00000075 5px, #00000075 15px, #00000050 15px, #00000050 25px);";
-      }
-      return "linear-gradient(#00000050, #00000050)";
-    }
-  }};
+// Hover text: what a dupe of the previous roll would give here, and where it
+// leads
+const dupeTitle = (unit: Roll) =>
+  unit.unitIfDupe
+    ? `중복 시: ${unitKo(unit.unitIfDupe.unitName)}${
+        unit.dupeTargetCellId ? ` → ${unit.dupeTargetCellId}` : ""
+      }`
+    : undefined;
 
-  background-color: ${(props) => {
+const makeRollHref = (
+  baseQuery: string,
+  seed: number | undefined,
+  lastCat: string | undefined
+) =>
+  `?${baseQuery ? `${baseQuery}&` : ""}seed=${
+    seed ?? ""
+  }&lastCat=${encodeURIComponent(lastCat ?? "")}`;
+
+type TrackRowPairProps = {
+  rowIndex: number;
+  track: "A" | "B";
+  row: Roll[];
+  bannerShortNames: string[];
+  baseQuery: string;
+  onSelect: (selected: string) => void;
+};
+
+const TrackRowPair = React.memo(
+  ({
+    rowIndex,
+    track,
+    row,
+    bannerShortNames,
+    baseQuery,
+    onSelect,
+  }: TrackRowPairProps) => {
+    const rowNum = rowIndex + 1;
+    const cellCoord = `${rowNum}${track}`;
+    return (
+      <>
+        <tr>
+          <td rowSpan={2} className="r-num">
+            {cellCoord}
+          </td>
+          {row.map((unit: Roll, j) => {
+            const showDupe = !!unit.dupeInfo?.showDupe;
+            const bannerShort = bannerShortNames[j];
+            const topStyle = getCellStyle(
+              unit.rarity,
+              unit.unitIfDistinct.unitName,
+              unit.highlight?.top,
+              unit.highlight?.isLast,
+              unit.found?.top,
+              unit.pathStep?.top
+            );
+            return (
+              <td
+                key={j}
+                className="t"
+                title={dupeTitle(unit)}
+                id={cellElementId(bannerShort, cellCoord)}
+                style={topStyle}
+                onClick={(e) => {
+                  if ((e.target as Node).nodeName === "A") {
+                    return;
+                  }
+                  onSelect(`c,${unit.raritySeed},${bannerShort}`);
+                }}
+              >
+                {unit.pathStep?.top && (
+                  <span className="p-badge">{unit.pathStep.top}</span>
+                )}
+                {showDupe ? (
+                  <a
+                    href={makeRollHref(
+                      baseQuery,
+                      unit.unitIfDistinct.unitSeed,
+                      unit.unitIfDistinct.unitName
+                    )}
+                  >
+                    {unitKo(unit.unitIfDistinct.unitName)}
+                  </a>
+                ) : (
+                  "\u00A0"
+                )}
+              </td>
+            );
+          })}
+        </tr>
+        <tr>
+          {row.map((unit: Roll, j) => {
+            const showDupe = !!unit.dupeInfo?.showDupe;
+            const bannerShort = bannerShortNames[j];
+            const bottomUnitName = showDupe
+              ? unit.unitIfDupe?.unitName
+              : unit.unitIfDistinct.unitName;
+            const bottomStyle = getCellStyle(
+              unit.rarity,
+              bottomUnitName,
+              unit.highlight?.bottom,
+              unit.highlight?.isLast,
+              unit.found?.bottom,
+              unit.pathStep?.bottom
+            );
+            return (
+              <td
+                key={j}
+                className="b"
+                title={dupeTitle(unit)}
+                style={bottomStyle}
+                onClick={(e) => {
+                  if ((e.target as Node).nodeName === "A") {
+                    return;
+                  }
+                  onSelect(
+                    `${showDupe ? "r" : "c"},${unit.raritySeed},${bannerShort}`
+                  );
+                }}
+              >
+                {unit.pathStep?.bottom && (
+                  <span className="p-badge">{unit.pathStep.bottom}</span>
+                )}
+                {showDupe ? (
+                  <a
+                    href={makeRollHref(
+                      baseQuery,
+                      unit.unitIfDupe?.unitSeed,
+                      unit.unitIfDupe?.unitName
+                    )}
+                  >
+                    {track === "A"
+                      ? `${unitKo(unit.unitIfDupe?.unitName)} -> ${
+                          unit.dupeInfo?.targetCellId
+                        }${unit.dupeInfo?.targetWillRerollAgain ? "R" : ""}`
+                      : `<- ${unit.dupeInfo?.targetCellId}${
+                          unit.dupeInfo?.targetWillRerollAgain ? "R" : ""
+                        } ${unitKo(unit.unitIfDupe?.unitName)}`}
+                  </a>
+                ) : (
+                  <a
+                    href={makeRollHref(
+                      baseQuery,
+                      unit.unitIfDistinct.unitSeed,
+                      unit.unitIfDistinct.unitName
+                    )}
+                  >
+                    {unitKo(unit.unitIfDistinct.unitName)}
+                  </a>
+                )}
+              </td>
+            );
+          })}
+        </tr>
+      </>
+    );
+  },
+  (prev, next) => {
     if (
-      [
-        "Cat Cannon Attack",
-        "Cat Cannon Charge",
-        "Worker Cat Rate",
-        "Worker Cat Wallet",
-        "Base Defense",
-        "Research",
-        "Accounting",
-        "Study",
-        "Cat Energy",
-      ].includes(props.unitName || "")
+      prev.rowIndex !== next.rowIndex ||
+      prev.track !== next.track ||
+      prev.baseQuery !== next.baseQuery ||
+      prev.onSelect !== next.onSelect ||
+      prev.row.length !== next.row.length
     ) {
-      return "#c9e4ff";
+      return false;
     }
-    switch (props.rarity) {
-      case 0:
-        return "#FFFFFF";
-      case 1:
-        return "#EEEEEE";
-      case 2:
-        return "gold";
-      case 3:
-        return "red";
-      case 4:
-        return "aqua";
-      default:
-        return "#EEEEEE";
+    for (let j = 0; j < prev.row.length; j++) {
+      if (
+        prev.row[j] !== next.row[j] ||
+        prev.bannerShortNames[j] !== next.bannerShortNames[j]
+      ) {
+        return false;
+      }
     }
-  }};
-`;
-
-const TopTd = styled(Td)`
-  cursor: pointer;
-  border-bottom: none;
-  padding: 0 8px;
-`;
-
-const BottomTd = styled(Td)`
-  cursor: pointer;
-  border-top: none;
-  padding: 0 8px;
-`;
+    return true;
+  }
+);
 
 const TrackTable = ({
   rolls,
   track,
+  onSelect,
 }: {
   rolls: BannerTrackRolls[];
   track: "A" | "B";
+  onSelect: (selected: string) => void;
 }) => {
-  const zippedRolls = zip(rolls.map((roll) => roll.track));
+  const zippedRolls = useMemo(
+    () => zip(rolls.map((roll) => roll.track)),
+    [rolls]
+  );
+  const bannerShortNames = useMemo(
+    () => rolls.map((roll) => roll.bannerShortName),
+    [rolls]
+  );
+  const baseQuery = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    params.delete("seed");
+    params.delete("lastCat");
+    return params.toString();
+  }, [rolls]);
+
   return (
     <Table cellSpacing={0}>
       <thead>
         <tr>
-          <Th>#</Th>
+          <th>#</th>
           {rolls.map((roll) => (
-            <Th key={roll.bannerName}>{bannerKo(roll.bannerName)}</Th>
+            <th key={roll.bannerName}>{bannerKo(roll.bannerName)}</th>
           ))}
         </tr>
       </thead>
       <tbody>
         {track === "B" && (
           <tr>
-            <Td rarity={0} colSpan={rolls.length + 1}>
+            <td className="spacer" colSpan={rolls.length + 1}>
               &nbsp;
-            </Td>
+            </td>
           </tr>
         )}
-        {zippedRolls.map((row, i) => {
-          return (
-            <>
-              <tr>
-                <Td rowSpan={2} rarity={-1}>
-                  {i + 1}
-                  {track}
-                </Td>
-                {row.map((unit: Roll, j) => {
-                  const urlParams = new URLSearchParams(window.location.search);
-                  urlParams.set(
-                    "seed",
-                    unit.unitIfDistinct.unitSeed.toString()
-                  );
-                  urlParams.set("lastCat", unit.unitIfDistinct.unitName);
-                  const canonicalDestination = `?${urlParams.toString()}`;
-                  return (
-                    <TopTd
-                      key={j}
-                      id={cellElementId(rolls[j].bannerShortName, `${i + 1}${track}`)}
-                      foundColor={unit.found?.top}
-                      rarity={unit.rarity}
-                      unitName={unit.unitIfDistinct.unitName}
-                      onClick={(e) => {
-                        // Don't highlight if clicking on the link itself
-                        if ((e.target as Node).nodeName === "A") {
-                          return;
-                        }
-                        // r = reroll, c = canonical
-                        const selected = `c,${unit.raritySeed},${rolls[j].bannerShortName}`;
-                        if (getQueryParam("selected") === selected) {
-                          setQueryParam("selected", "");
-                        } else {
-                          setQueryParam("selected", selected);
-                        }
-                      }}
-                      highlight={unit.highlight?.top}
-                      isLastHighlighted={unit.highlight?.isLast}
-                    >
-                      {unit.dupeInfo?.showDupe ? (
-                        <a href={canonicalDestination}>
-                          {unitKo(unit.unitIfDistinct.unitName)}
-                        </a>
-                      ) : (
-                        "\u00A0"
-                      )}
-                    </TopTd>
-                  );
-                })}
-              </tr>
-              <tr>
-                {row.map((unit: Roll, j) => {
-                  const urlParams = new URLSearchParams(window.location.search);
-                  urlParams.set(
-                    "seed",
-                    unit.unitIfDistinct.unitSeed.toString()
-                  );
-                  urlParams.set("lastCat", unit.unitIfDistinct.unitName);
-                  const canonicalDestination = `?${urlParams.toString()}`;
-
-                  const rerollUrlParams = new URLSearchParams(
-                    window.location.search
-                  );
-                  rerollUrlParams.set(
-                    "seed",
-                    unit.unitIfDupe?.unitSeed?.toString() || ""
-                  );
-                  rerollUrlParams.set(
-                    "lastCat",
-                    unit.unitIfDupe?.unitName || ""
-                  );
-                  const rerollDestination = `?${rerollUrlParams.toString()}`;
-
-                  const rerollDestinationText =
-                    track === "A"
-                      ? `${unitKo(unit.unitIfDupe?.unitName)} -> ${
-                          unit.dupeInfo?.targetCellId
-                        }${unit.dupeInfo?.targetWillRerollAgain ? "R" : ""}`
-                      : `<- ${unit.dupeInfo?.targetCellId}${
-                          unit.dupeInfo?.targetWillRerollAgain ? "R" : ""
-                        } ${unitKo(unit.unitIfDupe?.unitName)}`;
-                  return (
-                    <BottomTd
-                      key={j}
-                      foundColor={unit.found?.bottom}
-                      rarity={unit.rarity}
-                      unitName={
-                        unit.dupeInfo?.showDupe
-                          ? unit.unitIfDupe!.unitName
-                          : unit.unitIfDistinct.unitName
-                      }
-                      onClick={(e) => {
-                        // Don't highlight if clicking on the link itself
-                        if ((e.target as Node).nodeName === "A") {
-                          return;
-                        }
-                        // r = reroll, c = canonical
-                        const selected = `${
-                          unit.dupeInfo?.showDupe ? "r" : "c"
-                        },${unit.raritySeed},${rolls[j].bannerShortName}`;
-                        if (getQueryParam("selected") === selected) {
-                          setQueryParam("selected", "");
-                        } else {
-                          setQueryParam("selected", selected);
-                        }
-                      }}
-                      highlight={unit.highlight?.bottom}
-                      isLastHighlighted={unit.highlight?.isLast}
-                    >
-                      {unit.dupeInfo?.showDupe ? (
-                        <a href={rerollDestination}>{rerollDestinationText}</a>
-                      ) : (
-                        <a href={canonicalDestination}>
-                          {unitKo(unit.unitIfDistinct.unitName)}
-                        </a>
-                      )}
-                    </BottomTd>
-                  );
-                })}
-              </tr>
-            </>
-          );
-        })}
+        {zippedRolls.map((row, i) => (
+          <TrackRowPair
+            key={i}
+            rowIndex={i}
+            track={track}
+            row={row}
+            bannerShortNames={bannerShortNames}
+            baseQuery={baseQuery}
+            onSelect={onSelect}
+          />
+        ))}
         {track === "A" && (
           <tr>
-            <Td rarity={0} colSpan={rolls.length + 1}>
+            <td className="spacer" colSpan={rolls.length + 1}>
               &nbsp;
-            </Td>
+            </td>
           </tr>
         )}
       </tbody>
@@ -250,4 +375,4 @@ const TrackTable = ({
   );
 };
 
-export default TrackTable;
+export default React.memo(TrackTable);

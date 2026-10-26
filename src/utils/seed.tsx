@@ -17,6 +17,8 @@ export type Roll = {
     rerolledTimes: number;
   };
   // These get filled in later
+  // Where the dupe reroll leads, if it's within the generated rolls
+  dupeTargetCellId?: string;
   dupeInfo?: {
     showDupe: boolean;
     targetCellId: string;
@@ -27,6 +29,11 @@ export type Roll = {
     isLast?: boolean;
     top: boolean;
     bottom: boolean;
+  };
+  // Step number (1-based) of the best path pull on this half of the cell
+  pathStep?: {
+    top?: number;
+    bottom?: number;
   };
   // Outline color for the half of the cell showing an item picked in "find"
   found?: {

@@ -1,6 +1,6 @@
 const DEFAULTS = {
   seed: "1",
-  banners: "n,ce",
+  banners: "n,ce,lt",
   rolls: "100",
   lastCat: "",
   selected: "",
@@ -14,6 +14,7 @@ const DEFAULTS = {
   evGuar: "",
   evStock: "",
   evMedama: "",
+  evFind: "",
 };
 
 export const getQueryParam = (key: keyof typeof DEFAULTS): string => {

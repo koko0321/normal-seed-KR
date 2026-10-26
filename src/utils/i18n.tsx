@@ -168,6 +168,26 @@ export const unitKo = (name: string | undefined): string =>
     ? ""
     : UNIT_NAMES_KO[name] || EVENT_UNIT_NAMES_KO[name] || name;
 
-export const bannerKo = (name: string): string => BANNER_NAMES_KO[name] || name;
+export const bannerKo = (name: string): string =>
+  name in BANNER_NAMES_KO
+    ? BANNER_NAMES_KO[name]
+    : name in EVENT_NAMES_KO
+    ? `이벤트 뽑기 (${EVENT_NAMES_KO[name]})`
+    : name;
+
+// The tracker's lastCat URL param holds an internal (English) unit name. Old
+// links from the first version of the site hold Korean names instead, and a
+// shared link can pick up extra text after it (e.g. "<br>..."). Returns the
+// internal name, or "" when the value isn't a known unit.
+export const normalizeLastCat = (value: string): string => {
+  const name = value.split("<")[0].trim();
+  if (name === "" || name in UNIT_NAMES_KO) {
+    return name;
+  }
+  const internal = Object.keys(UNIT_NAMES_KO).find(
+    (key) => UNIT_NAMES_KO[key] === name
+  );
+  return internal || "";
+};
 
 export const eventKo = (name: string): string => EVENT_NAMES_KO[name] || name;

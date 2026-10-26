@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import styled from "@emotion/styled";
-import { Tooltip, Typography } from "@mui/material";
+import { Typography } from "@mui/material";
 import { getQueryParam, setQueryParam } from "./utils/queryParams";
 import {
   EVENT_GACHAS,
   EventGacha,
   EventPoolColor,
+  MEDAMA,
   MULTI_ROLL_NUM,
 } from "./utils/eventData";
 import {
@@ -17,6 +18,9 @@ import {
   singlePull,
 } from "./utils/eventEngine";
 import { eventKo, unitKo } from "./utils/i18n";
+import { PathResult, PathStep } from "./utils/eventPathFinder";
+import { FOUND_FILL, Swatch, findColor } from "./RollTable";
+import type { PathFinderRequest } from "./eventPathFinderWorker";
 
 type Destination = { outcome: PullOutcome; dest: number };
 
@@ -100,8 +104,10 @@ const buildCells = (
       if (plain.outcome.state.lastRoll === NO_DUPE) {
         plain.outcome.state.lastRoll = state.lastRoll;
       }
-      const plainResult = plain.outcome.results[plain.outcome.results.length - 1];
-      const canDupe = !plainResult.isMedama && gacha.pools[plainResult.pool].reroll;
+      const plainResult =
+        plain.outcome.results[plain.outcome.results.length - 1];
+      const canDupe =
+        !plainResult.isMedama && gacha.pools[plainResult.pool].reroll;
       const dupe = canDupe ? regularPull(plainResult.unit) : undefined;
       const hasMulti = !!gacha.guaranteed || medamaActive(gacha, state);
       const multi = hasMulti
@@ -197,6 +203,41 @@ const Small = styled.div`
   }
 `;
 
+const eventCellId = (index: number) => `ev-cell-${index}`;
+
+const FindChip = styled.span`
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 2px 1px 6px;
+  border: 1px solid #999;
+  border-radius: 12px;
+  button {
+    padding: 0 4px;
+    border: none;
+    background: none;
+    cursor: pointer;
+  }
+`;
+
+const PositionLink = styled.button`
+  padding: 0;
+  border: none;
+  background: none;
+  color: #0000ee;
+  text-decoration: underline;
+  cursor: pointer;
+`;
+
+const PathBox = styled.div`
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  max-width: 720px;
+  background: #fafafa;
+`;
+
 const EventPage = () => {
   useEffect(() => {
     document.title = "이벤트 뽑기 배열";
@@ -210,6 +251,20 @@ const EventPage = () => {
     kind: "single" | "multi";
     useDupe: boolean;
   } | null>(null);
+  // Shortest path: how many of each event character to get, and the result
+  const [pathCounts, setPathCounts] = useState<Record<string, number>>({});
+  const [pathResult, setPathResult] = useState<PathResult | null>(null);
+  const [pathComputing, setPathComputing] = useState(false);
+  const [pathProgress, setPathProgress] = useState<number | null>(null);
+  const pathWorkerRef = useRef<Worker | null>(null);
+  const stopPathWorker = () => {
+    pathWorkerRef.current?.terminate();
+    pathWorkerRef.current = null;
+  };
+  useEffect(() => stopPathWorker, []);
+  // Normal ticket banners to mix in, and the ticket budget (null: get all)
+  const [pathBudget, setPathBudget] = useState<number | null>(null);
+  const [useLuckyTickets, setUseLuckyTickets] = useState(true);
   const numRolls = parseInt(getQueryParam("evRolls"), 10);
   const seed = parseInt(getQueryParam("evSeed"), 10) || 1;
 
@@ -235,14 +290,18 @@ const EventPage = () => {
       : null,
   };
 
-  const seeds = new SeedList(seed);
-  // Extra buffer so a multi-pull near the bottom can still highlight its destination
-  const { trackCount, cells } = buildCells(
-    gacha,
-    seeds,
-    numRolls + 12,
-    initialState,
-    multiRollCount
+  // The table depends only on these settings (all from the URL), and building
+  // it is the heaviest part of the page, so it's built once rather than on
+  // every re-render (e.g. each progress update of a path search)
+  const initialStateKey = JSON.stringify(initialState);
+  const seeds = useMemo(() => new SeedList(seed), [seed]);
+  const { trackCount, cells } = useMemo(
+    () =>
+      // Extra buffer so a multi-pull near the bottom can still highlight its
+      // destination
+      buildCells(gacha, seeds, numRolls + 12, initialState, multiRollCount),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [gacha.key, seeds, numRolls, initialStateKey, multiRollCount]
   );
 
   type CellHighlight = {
@@ -252,69 +311,170 @@ const EventPage = () => {
     isGuaranteedStep?: boolean;
     multiSelected?: boolean;
   };
-  const highlights = new Map<number, CellHighlight>();
-  if (selectedPull) {
-    const startCell = cells.get(selectedPull.index);
-    if (startCell) {
-      if (selectedPull.kind === "multi" && startCell.multi) {
-        const chosen =
-          selectedPull.useDupe && startCell.multiDupe
-            ? startCell.multiDupe
-            : startCell.multi;
-        highlights.set(startCell.index, {
-          ...highlights.get(startCell.index),
-          multiSelected: true,
-        });
-        for (const r of chosen.outcome.results) {
-          if (r.cellIndex !== undefined) {
-            const prev = highlights.get(r.cellIndex) || {};
-            highlights.set(r.cellIndex, {
-              ...prev,
-              inPath: true,
-              usedDupe: prev.usedDupe || r.rerolled,
-              isGuaranteedStep: prev.isGuaranteedStep || r.isGuaranteed,
-            });
+  const highlights = useMemo(() => {
+    const highlights = new Map<number, CellHighlight>();
+    const markCell = (index: number, mark: CellHighlight) =>
+      highlights.set(index, { ...highlights.get(index), ...mark });
+    if (pathResult?.found) {
+      // The shortest path: every pull's starting cell, the cells a 10-pull goes
+      // through, and where it ends
+      for (const step of pathResult.steps) {
+        if (step.banner) {
+          markCell(step.index, {
+            inPath: true,
+            usedDupe: true,
+          });
+        } else if (step.kind === "single") {
+          markCell(step.index, {
+            inPath: true,
+            usedDupe: step.outcome.results.some((r) => r.rerolled),
+          });
+        } else {
+          markCell(step.index, { multiSelected: true });
+          for (const r of step.outcome.results) {
+            if (r.cellIndex !== undefined) {
+              markCell(r.cellIndex, {
+                inPath: true,
+                isGuaranteedStep:
+                  highlights.get(r.cellIndex)?.isGuaranteedStep ||
+                  r.isGuaranteed,
+              });
+            }
           }
         }
-        const prevDest = highlights.get(chosen.dest) || {};
-        highlights.set(chosen.dest, {
-          ...prevDest,
-          inPath: true,
-          isLanding: true,
-        });
-      } else if (selectedPull.kind === "single") {
-        let curIndex = startCell.index;
-        let forceDupeFirst = selectedPull.useDupe;
-        let prevUnit = "";
-        for (let step = 0; step <= MULTI_ROLL_NUM; step++) {
-          const c = cells.get(curIndex);
-          if (!c) {
-            break;
-          }
-          const isLast = step === MULTI_ROLL_NUM;
-          const plainRes = c.plain.outcome.results;
-          const plainUnit = plainRes[plainRes.length - 1].unit;
-          const takeDupe =
-            !isLast &&
-            !!c.dupe &&
-            (step === 0 ? forceDupeFirst : plainUnit === prevUnit);
-          const prev = highlights.get(curIndex) || {};
-          highlights.set(curIndex, {
-            ...prev,
-            inPath: true,
-            isLanding: isLast,
-            usedDupe: !isLast ? takeDupe : prev.usedDupe,
+      }
+      markCell(pathResult.endIndex, { inPath: true, isLanding: true });
+    } else if (selectedPull) {
+      const startCell = cells.get(selectedPull.index);
+      if (startCell) {
+        if (selectedPull.kind === "multi" && startCell.multi) {
+          const chosen =
+            selectedPull.useDupe && startCell.multiDupe
+              ? startCell.multiDupe
+              : startCell.multi;
+          highlights.set(startCell.index, {
+            ...highlights.get(startCell.index),
+            multiSelected: true,
           });
-          if (isLast) {
-            break;
+          for (const r of chosen.outcome.results) {
+            if (r.cellIndex !== undefined) {
+              const prev = highlights.get(r.cellIndex) || {};
+              highlights.set(r.cellIndex, {
+                ...prev,
+                inPath: true,
+                usedDupe: prev.usedDupe || r.rerolled,
+                isGuaranteedStep: prev.isGuaranteedStep || r.isGuaranteed,
+              });
+            }
           }
-          const dest = takeDupe && c.dupe ? c.dupe : c.plain;
-          prevUnit = dest.outcome.state.lastRoll;
-          curIndex = dest.dest;
+          const prevDest = highlights.get(chosen.dest) || {};
+          highlights.set(chosen.dest, {
+            ...prevDest,
+            inPath: true,
+            isLanding: true,
+          });
+        } else if (selectedPull.kind === "single") {
+          let curIndex = startCell.index;
+          let forceDupeFirst = selectedPull.useDupe;
+          let prevUnit = "";
+          for (let step = 0; step <= MULTI_ROLL_NUM; step++) {
+            const c = cells.get(curIndex);
+            if (!c) {
+              break;
+            }
+            const isLast = step === MULTI_ROLL_NUM;
+            const plainRes = c.plain.outcome.results;
+            const plainUnit = plainRes[plainRes.length - 1].unit;
+            const takeDupe =
+              !isLast &&
+              !!c.dupe &&
+              (step === 0 ? forceDupeFirst : plainUnit === prevUnit);
+            const prev = highlights.get(curIndex) || {};
+            highlights.set(curIndex, {
+              ...prev,
+              inPath: true,
+              isLanding: isLast,
+              usedDupe: !isLast ? takeDupe : prev.usedDupe,
+            });
+            if (isLast) {
+              break;
+            }
+            const dest = takeDupe && c.dupe ? c.dupe : c.plain;
+            prevUnit = dest.outcome.state.lastRoll;
+            curIndex = dest.dest;
+          }
         }
       }
     }
-  }
+    return highlights;
+  }, [cells, pathResult, selectedPull]);
+
+  // 아이템 검색: where each picked item comes out within the rows shown, as a
+  // single pull (with "R" when it's the dupe reroll result shown in the cell)
+  // and, separately, as the guaranteed character of a single pull
+  const findUnits = getQueryParam("evFind").split(",").filter(Boolean);
+  const findKey = findUnits.join(",");
+  const findFound = useMemo(() => {
+    const colors = new Map<number, string>();
+    const items = findUnits.map((unit, findIndex) => {
+      const color = findColor(findIndex);
+      const positions: { label: string; index: number }[] = [];
+      const guaranteedPositions: { label: string; index: number }[] = [];
+      const lastIndex = numRolls * trackCount + trackCount - 1;
+      for (let index = 1; index <= lastIndex; index++) {
+        const cell = cells.get(index);
+        if (!cell || Math.floor((index - 1) / trackCount) >= numRolls) {
+          continue;
+        }
+        const has = (destination?: Destination) =>
+          !!destination &&
+          destination.outcome.results.some((r) => r.unit === unit);
+        if (has(cell.plain)) {
+          positions.push({ label: cell.label, index });
+          colors.set(index, colors.get(index) || color);
+        }
+        if (cell.showDupe && has(cell.dupe)) {
+          positions.push({ label: `${cell.label}R`, index });
+          colors.set(index, colors.get(index) || color);
+        }
+        if (has(cell.guaranteed)) {
+          guaranteedPositions.push({ label: cell.label, index });
+        }
+      }
+      return { unit, color, positions, guaranteedPositions };
+    });
+    return { items, colors };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cells, findKey, numRolls, trackCount]);
+
+  const findOptions = [
+    ...new Set([
+      ...gacha.pools.flatMap((pool) => pool.units),
+      ...(gacha.medama ? [MEDAMA] : []),
+    ]),
+  ].filter((unit) => !findUnits.includes(unit));
+
+  const scrollToCell = (index: number) =>
+    document
+      .getElementById(eventCellId(index))
+      ?.scrollIntoView({ block: "center", inline: "nearest" });
+
+  // At most this many positions are listed per line; the rest are counted
+  const FIND_LIST_LIMIT = 100;
+  const renderPositions = (positions: { label: string; index: number }[]) => (
+    <>
+      {positions.slice(0, FIND_LIST_LIMIT).map(({ label, index }, i) => (
+        <React.Fragment key={label}>
+          {i > 0 && ", "}
+          <PositionLink type="button" onClick={() => scrollToCell(index)}>
+            {label}
+          </PositionLink>
+        </React.Fragment>
+      ))}
+      {positions.length > FIND_LIST_LIMIT &&
+        ` …외 ${positions.length - FIND_LIST_LIMIT}개`}
+    </>
+  );
 
   // Link to the table after a pull: the seed before the destination, plus the
   // state the pull leaves behind
@@ -381,11 +541,7 @@ const EventPage = () => {
             ? "특별 아이템(확정)"
             : "특별 아이템"
           : unitKo(r.unit);
-        const suffix = r.isGuaranteed
-          ? " (확정)"
-          : r.rerolled
-          ? " (중복)"
-          : "";
+        const suffix = r.isGuaranteed ? " (확정)" : r.rerolled ? " (중복)" : "";
         return `${i + 1}: ${name}${suffix}`;
       })
       .join("\n");
@@ -412,18 +568,12 @@ const EventPage = () => {
     ].join("\n");
   };
 
-  const wrapTooltip = (title: string | undefined, children: React.ReactElement) =>
-    title ? (
-      <Tooltip
-        title={<span style={{ whiteSpace: "pre-line" }}>{title}</span>}
-        arrow
-        placement="top"
-      >
-        {children}
-      </Tooltip>
-    ) : (
-      children
-    );
+  // The browser's own tooltip: the table has thousands of cells, and a tooltip
+  // component per cell made rendering it far slower
+  const wrapTooltip = (
+    title: string | undefined,
+    children: React.ReactElement
+  ) => (title ? React.cloneElement(children, { title }) : children);
 
   const highlightBackground = (hl?: CellHighlight) => {
     if (!hl?.inPath) {
@@ -445,6 +595,7 @@ const EventPage = () => {
     if ((e.target as HTMLElement).closest("a")) {
       return;
     }
+    setPathResult(null);
     setSelectedPull((prev) => {
       if (!prev || prev.index !== index || prev.kind !== kind) {
         return { index, kind, useDupe: defaultDupe };
@@ -464,17 +615,21 @@ const EventPage = () => {
       : POOL_COLORS[gacha.pools[last.pool].color];
     const jumps = cell.plain.dest !== cell.index + trackCount;
     const singleTooltip = cell.dupe
-      ? `중복 시: ${resultText(cell.dupe.outcome)} → ${destLabel(cell.dupe.dest)}`
+      ? `중복 시: ${resultText(cell.dupe.outcome)} → ${destLabel(
+          cell.dupe.dest
+        )}`
       : undefined;
     const hl = highlights.get(cell.index);
     const bgImage = highlightBackground(hl);
     const showDupeLine = (cell.showDupe || hl?.usedDupe) && cell.dupe;
+    const foundColor = findFound.colors.get(cell.index);
     return (
       <React.Fragment key={cell.index}>
         <td rowSpan={trackCount}>{cell.label}</td>
         {wrapTooltip(
           singleTooltip,
           <td
+            id={eventCellId(cell.index)}
             rowSpan={trackCount}
             onClick={(e) =>
               toggleSelect(
@@ -486,11 +641,17 @@ const EventPage = () => {
               )
             }
             style={{
-              backgroundColor: background,
               backgroundImage: bgImage,
               cursor: "pointer",
               borderBottom:
                 cell.dupe && !showDupeLine ? "1px dotted #1976d2" : undefined,
+              // Items picked in 아이템 검색: light green fill, outlined in
+              // the item's color
+              backgroundColor: foundColor ? FOUND_FILL : background,
+              boxShadow: foundColor
+                ? `inset 0 0 0 3px ${foundColor}`
+                : undefined,
+              fontWeight: foundColor ? "bold" : undefined,
             }}
           >
             <div
@@ -508,7 +669,8 @@ const EventPage = () => {
                 }}
               >
                 <a href={hrefFor(cell.dupe)}>
-                  ({resultText(cell.dupe.outcome)} → {destLabel(cell.dupe.dest)})
+                  ({resultText(cell.dupe.outcome)} → {destLabel(cell.dupe.dest)}
+                  )
                 </a>
               </div>
             )}
@@ -597,32 +759,38 @@ const EventPage = () => {
   };
 
   // One table row per seed; each cell spans trackCount rows, and track t
-  // starts t seeds later
-  const lastIndex = numRolls * trackCount + trackCount - 1;
-  const rows = [];
-  for (let index = 1; index <= lastIndex; index++) {
-    const tds = [];
-    for (let track = 0; track < trackCount; track++) {
-      const cell = cells.get(index);
-      const row = Math.floor((index - 1) / trackCount);
-      if ((index - 1) % trackCount === track && row < numRolls && cell) {
-        tds.push(renderCell(cell));
-      } else if (index === 1 && track > 0) {
-        tds.push(
-          <td key={`top-${track}`} colSpan={colsPerTrack} rowSpan={track} />
-        );
-      } else if (index === numRolls * trackCount + track + 1) {
-        tds.push(
-          <td
-            key={`bottom-${track}`}
-            colSpan={colsPerTrack}
-            rowSpan={trackCount - 1 - track}
-          />
-        );
+  // starts t seeds later. Only rebuilt when the table or its highlights
+  // change, not on every re-render of the page (e.g. path search progress).
+  const rows = useMemo(() => {
+    const lastIndex = numRolls * trackCount + trackCount - 1;
+    const rows = [];
+    for (let index = 1; index <= lastIndex; index++) {
+      const tds = [];
+      for (let track = 0; track < trackCount; track++) {
+        const cell = cells.get(index);
+        const row = Math.floor((index - 1) / trackCount);
+        if ((index - 1) % trackCount === track && row < numRolls && cell) {
+          tds.push(renderCell(cell));
+        } else if (index === 1 && track > 0) {
+          tds.push(
+            <td key={`top-${track}`} colSpan={colsPerTrack} rowSpan={track} />
+          );
+        } else if (index === numRolls * trackCount + track + 1) {
+          tds.push(
+            <td
+              key={`bottom-${track}`}
+              colSpan={colsPerTrack}
+              rowSpan={trackCount - 1 - track}
+            />
+          );
+        }
       }
+      rows.push(<tr key={index}>{tds}</tr>);
     }
-    rows.push(<tr key={index}>{tds}</tr>);
-  }
+    return rows;
+    // renderCell reads only these (plus values derived from the URL)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cells, highlights, selectedPull, trackCount, numRolls, findFound]);
 
   // Changing the event resets everything that depends on it
   const switchEvent = (key: string) => {
@@ -634,9 +802,57 @@ const EventPage = () => {
     window.location.href = `?${params.toString()}#/event`;
   };
 
-  const rerollUnits = [
-    ...new Set(gacha.pools.filter((p) => p.reroll).flatMap((p) => p.units)),
+  // Event characters that can be picked as shortest path targets
+  const pathCharacters = [
+    ...new Set(
+      gacha.pools.filter((p) => p.color === "special").flatMap((p) => p.units)
+    ),
   ];
+  const pathTargets = pathCharacters
+    .filter((unit) => (pathCounts[unit] || 0) > 0)
+    .map((unit) => ({ unit, count: pathCounts[unit] }));
+
+  // Every event character a path actually rolls (targets can come out more
+  // often than asked), targets first in the order picked
+  const pathCharactersRolled = (steps: PathStep[]) => {
+    const counts = new Map<string, number>();
+    for (const step of steps) {
+      for (const result of step.outcome.results) {
+        if (pathCharacters.includes(result.unit)) {
+          counts.set(result.unit, (counts.get(result.unit) || 0) + 1);
+        }
+      }
+    }
+    return pathCharacters
+      .filter((unit) => counts.has(unit))
+      .map((unit) => ({
+        unit,
+        count: counts.get(unit)!,
+        goal: pathTargets.find((t) => t.unit === unit)?.count,
+      }))
+      .sort((a, b) => (b.goal ? 1 : 0) - (a.goal ? 1 : 0));
+  };
+
+  // e.g. "이벤트 티켓 13장 (단발 3번 · 10연 1번)"
+  const ticketSummary = (steps: PathStep[], tickets: number) => {
+    const singles = steps.filter((s) => !s.banner && s.kind === "single").length;
+    const multis = steps.filter((s) => !s.banner && s.kind === "multi").length;
+    const luckySteps = steps.filter((s) => s.banner);
+    const luckyCreates = luckySteps.filter(
+      (s) => s.dupeAction !== "avoid"
+    ).length;
+    const luckyAvoids = luckySteps.filter(
+      (s) => s.dupeAction === "avoid"
+    ).length;
+    let luckyDesc = "";
+    if (luckySteps.length > 0) {
+      const parts = [];
+      if (luckyCreates > 0) parts.push(`열이동 ${luckyCreates}번`);
+      if (luckyAvoids > 0) parts.push(`중복 회피 ${luckyAvoids}번`);
+      luckyDesc = ` + 럭키티켓 ${luckySteps.length}장 (${parts.join(" · ")})`;
+    }
+    return `이벤트 티켓 ${tickets}장 (단발 ${singles}번 · ${MULTI_ROLL_NUM}연 ${multis}번)${luckyDesc}`;
+  };
 
   return (
     <>
@@ -644,10 +860,7 @@ const EventPage = () => {
         이벤트 뽑기 배열 <a href="#credits">[크레딧]</a>
       </Typography>
       <div style={{ display: "flex", gap: "6px", margin: "4px 0" }}>
-        <button
-          type="button"
-          onClick={() => (window.location.hash = "#/")}
-        >
+        <button type="button" onClick={() => (window.location.hash = "#/")}>
           냥코뽑기 배열로 이동
         </button>
         <button
@@ -674,9 +887,9 @@ const EventPage = () => {
           중복 재추첨도 냥코뽑기와 똑같이 작동합니다.
         </li>
         <li>
-          <strong>확정 뽑기</strong>: 확정 캐릭터가 포함된 연뽑은 첫 시드를
-          확정 캐릭터의 등급을 정하는 데 먼저 쓰고 시작합니다. 그래서 단일
-          뽑기를 여러 번 하는 것과 연뽑의 결과가 다릅니다.
+          <strong>확정 뽑기</strong>: 확정 캐릭터가 포함된 연뽑은 첫 시드를 확정
+          캐릭터의 등급을 정하는 데 먼저 쓰고 시작합니다. 그래서 단일 뽑기를
+          여러 번 하는 것과 연뽑의 결과가 다릅니다.
           <ul>
             <li>
               일반열 칸 아래의 작은 글씨는 그 칸이 단일 확정 뽑기일 때 나오는
@@ -688,19 +901,20 @@ const EventPage = () => {
               마우스를 올리면 1~{multiRollCount}번째에 무엇이 나오는지 확인할 수
               있고, <strong>링크 바깥의 칸 여백을 클릭</strong>하면 냥코뽑기
               배열처럼 {multiRollCount}연 동안 거쳐 가는 칸들과 열 이동 경로,
-              도착 위치(빗금)가 하이라이트됩니다(첫 칸이 중복 가능한 칸이면 한 번
-              더 클릭해 첫 칸 중복 경로도 볼 수 있습니다).
+              도착 위치(빗금)가 하이라이트됩니다(첫 칸이 중복 가능한 칸이면 한
+              번 더 클릭해 첫 칸 중복 경로도 볼 수 있습니다).
             </li>
             <li>
               <strong>일반열</strong>에서 중복 재추첨이 일어날 수 있는 칸에
-              마우스를 올리면 중복 시 무엇이 나오고 어디로 이동하는지 표시됩니다.
+              마우스를 올리면 중복 시 무엇이 나오고 어디로 이동하는지
+              표시됩니다.
             </li>
           </ul>
         </li>
         <li>
           <strong>특별 아이템</strong>(다운로드 기념 등의 한정 보상)이 남아 있는
-          뽑기는 뽑기마다 특별 아이템 당첨을 정하는 시드를 하나 더 써서 A·B·C열이
-          됩니다.
+          뽑기는 뽑기마다 특별 아이템 당첨을 정하는 시드를 하나 더 써서
+          A·B·C열이 됩니다.
           <ul>
             <li>
               특별 아이템이 나오면 시드를 1개만 쓰고, 마지막 뽑기(중복 판정)는
@@ -715,8 +929,8 @@ const EventPage = () => {
               됩니다. 재고를 먼저 소진하고 시드를 찾는 쪽이 간단합니다.
             </li>
             <li>
-              특별 아이템이 나오는 위치는 알 수 있지만, 특별 아이템 안에서 무엇이
-              나올지는 알 수 없습니다.
+              특별 아이템이 나오는 위치는 알 수 있지만, 특별 아이템 안에서
+              무엇이 나올지는 알 수 없습니다.
             </li>
           </ul>
         </li>
@@ -743,23 +957,12 @@ const EventPage = () => {
           value={seedInput}
           onChange={(event) => setSeedInput(event.target.value)}
         />
-        <button type="button" onClick={() => setQueryParam("evSeed", seedInput)}>
+        <button
+          type="button"
+          onClick={() => setQueryParam("evSeed", seedInput)}
+        >
           업데이트
         </button>
-      </div>
-      <Typography variant="subtitle2">마지막 뽑기</Typography>
-      <div style={{ marginBottom: "4px" }}>
-        <select
-          value={rerollUnits.includes(initialState.lastRoll) ? initialState.lastRoll : ""}
-          onChange={(event) => setQueryParam("evLast", event.target.value)}
-        >
-          <option value="">-- 없음 / 그 외 아이템 --</option>
-          {rerollUnits.map((unit) => (
-            <option key={unit} value={unit}>
-              {unitKo(unit)}
-            </option>
-          ))}
-        </select>
       </div>
       {gacha.guaranteed && (
         <>
@@ -769,13 +972,14 @@ const EventPage = () => {
               value={initialState.guaranteedLeft || gacha.guaranteed.step}
               onChange={(event) => setQueryParam("evGuar", event.target.value)}
             >
-              {Array.from({ length: gacha.guaranteed.step }, (_, i) => i + 1).map(
-                (left) => (
-                  <option key={left} value={left}>
-                    {left === 1 ? "1 (다음 뽑기가 확정)" : left}
-                  </option>
-                )
-              )}
+              {Array.from(
+                { length: gacha.guaranteed.step },
+                (_, i) => i + 1
+              ).map((left) => (
+                <option key={left} value={left}>
+                  {left === 1 ? "1 (다음 뽑기가 확정)" : left}
+                </option>
+              ))}
             </select>
           </div>
         </>
@@ -857,6 +1061,338 @@ const EventPage = () => {
           ))}
         </select>
       </div>
+      <Typography variant="subtitle2">아이템 검색</Typography>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "6px",
+          marginBottom: "4px",
+        }}
+      >
+        <select
+          style={{ maxWidth: "300px" }}
+          value=""
+          onChange={(event) => {
+            if (event.target.value) {
+              setQueryParam(
+                "evFind",
+                [...findUnits, event.target.value].join(",")
+              );
+            }
+          }}
+        >
+          <option value="">-- 찾을 아이템 추가 --</option>
+          {findOptions.map((unit) => (
+            <option key={unit} value={unit}>
+              {unit === MEDAMA ? "특별 아이템" : unitKo(unit)}
+            </option>
+          ))}
+        </select>
+        {findUnits.map((unit, findIndex) => (
+          <FindChip key={unit}>
+            <Swatch color={findColor(findIndex)} />
+            {unit === MEDAMA ? "특별 아이템" : unitKo(unit)}
+            <button
+              type="button"
+              title="빼기"
+              onClick={() =>
+                setQueryParam(
+                  "evFind",
+                  findUnits.filter((findUnit) => findUnit !== unit).join(",")
+                )
+              }
+            >
+              ×
+            </button>
+          </FindChip>
+        ))}
+        {findUnits.length > 1 && (
+          <button type="button" onClick={() => setQueryParam("evFind", "")}>
+            모두 지우기
+          </button>
+        )}
+      </div>
+      {findFound.items.length > 0 && (
+        <ul style={{ marginBottom: "8px" }}>
+          {findFound.items.map(
+            ({ unit, color, positions, guaranteedPositions }) => (
+              <li key={unit} style={{ marginBottom: "4px" }}>
+                <Swatch color={color} />
+                <strong>
+                  {unit === MEDAMA ? "특별 아이템" : unitKo(unit)}
+                </strong>
+                {" · "}
+                {positions.length}회
+                {positions.length === 0
+                  ? ` — ${numRolls}번 안에 없습니다.`
+                  : ": "}
+                {renderPositions(positions)}
+                {guaranteedPositions.length > 0 && (
+                  <div style={{ color: "#555" }}>
+                    확정이면 {guaranteedPositions.length}곳:{" "}
+                    {renderPositions(guaranteedPositions)}
+                  </div>
+                )}
+              </li>
+            )
+          )}
+          <li style={{ listStyle: "none", color: "#555" }}>
+            R은 직전 뽑기와 중복되어 재추첨될 때 나오는 경우입니다. 위치를
+            클릭하면 해당 칸으로 이동합니다.
+          </li>
+        </ul>
+      )}
+      <Typography variant="h6">최단 경로 찾기</Typography>
+      <PathBox>
+        <div style={{ marginBottom: "6px", color: "#555" }}>
+          원하는 이벤트 캐릭터와 개수를 고르면, 지금 위치(1A)와 설정에서 시작해{" "}
+          <strong>이벤트 티켓</strong>을 가장 적게 쓰는 경로를 찾습니다. 이벤트
+          뽑기는 단발과 {MULTI_ROLL_NUM}연만 섞어서 쓰고(위의 연뽑 횟수 설정과
+          상관없음), 확정으로 나오는 캐릭터도 개수에 포함합니다. 뽑기 횟수(
+          {numRolls}행) 안에서만 찾습니다.
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px" }}>
+          {pathCharacters.map((unit) => (
+            <label
+              key={unit}
+              style={{ display: "flex", alignItems: "center", gap: "4px" }}
+            >
+              {unitKo(unit)}
+              <select
+                value={pathCounts[unit] || 0}
+                onChange={(event) =>
+                  setPathCounts((prev) => ({
+                    ...prev,
+                    [unit]: parseInt(event.target.value, 10),
+                  }))
+                }
+              >
+                {Array.from({ length: 11 }, (_, count) => count).map(
+                  (count) => (
+                    <option key={count} value={count}>
+                      {count}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
+          ))}
+        </div>
+        <div style={{ marginTop: "8px" }}>
+          <label style={{ marginRight: "12px" }}>
+            <input
+              type="radio"
+              checked={pathBudget === null}
+              onChange={() => setPathBudget(null)}
+            />
+            목표를 모두 얻는 최소 이벤트 티켓
+          </label>
+          <label>
+            <input
+              type="radio"
+              checked={pathBudget !== null}
+              onChange={() => setPathBudget(30)}
+            />
+            이벤트 티켓{" "}
+            <input
+              type="number"
+              min={1}
+              max={999}
+              style={{ width: "56px" }}
+              value={pathBudget ?? 30}
+              disabled={pathBudget === null}
+              onChange={(event) =>
+                setPathBudget(
+                  Math.max(1, parseInt(event.target.value, 10) || 1)
+                )
+              }
+            />
+            장 안에서 최대한 많이
+          </label>
+        </div>
+        <div style={{ marginTop: "6px" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+            <input
+              type="checkbox"
+              checked={useLuckyTickets}
+              onChange={(e) => setUseLuckyTickets(e.target.checked)}
+            />
+            럭키티켓 섞어서 열이동 유도 / 중복 회피
+          </label>
+        </div>
+        <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+          <button
+            type="button"
+            disabled={pathTargets.length === 0 || pathComputing}
+            onClick={() => {
+              setSelectedPull(null);
+              setPathResult(null);
+              setPathProgress(null);
+              setPathComputing(true);
+              // The search runs in a worker so the page doesn't freeze
+              stopPathWorker();
+              const worker = new Worker(
+                new URL("./eventPathFinderWorker.ts", import.meta.url)
+              );
+              pathWorkerRef.current = worker;
+              worker.onmessage = (event: {
+                data:
+                  | { type: "progress"; tickets: number; states: number }
+                  | { type: "result"; result: PathResult };
+              }) => {
+                if (event.data.type === "progress") {
+                  setPathProgress(event.data.tickets);
+                } else {
+                  setPathResult(event.data.result);
+                  setPathComputing(false);
+                  stopPathWorker();
+                }
+              };
+              const request: PathFinderRequest = {
+                gachaKey: gacha.key,
+                seed,
+                startState: initialState,
+                targets: pathTargets,
+                maxIndex: numRolls * trackCount + 1,
+                // Paths use single pulls and full 10-pulls only, whatever the
+                // table's multi-pull setting is
+                multiCount: MULTI_ROLL_NUM,
+                budget: pathBudget,
+                useLuckyTickets,
+              };
+              worker.postMessage(request);
+            }}
+          >
+            최단 경로 찾기
+          </button>
+          {pathComputing && (
+            <button
+              type="button"
+              onClick={() => {
+                stopPathWorker();
+                setPathComputing(false);
+              }}
+            >
+              계산 중지
+            </button>
+          )}
+          {pathResult && (
+            <button type="button" onClick={() => setPathResult(null)}>
+              경로 지우기
+            </button>
+          )}
+        </div>
+        {pathComputing && (
+          <div style={{ marginTop: "8px" }}>
+            계산 중...
+            {pathProgress !== null && ` (${pathProgress}장까지 확인)`}
+          </div>
+        )}
+        {pathResult && !pathResult.found && (
+          <div style={{ marginTop: "8px", color: "#b00020" }}>
+            {pathResult.reason === "out-of-range"
+              ? `뽑기 횟수(${numRolls}행) 안에서는 모두 뽑을 수 없습니다. 뽑기 횟수를 늘려 보세요.`
+              : "경우의 수가 너무 많아 계산을 멈췄습니다. 목표 개수나 뽑기 횟수를 줄여 보세요."}
+          </div>
+        )}
+        {pathResult?.found && (
+          <div style={{ marginTop: "8px" }}>
+            {!pathResult.complete && (
+              <div>
+                <strong>
+                  이벤트 티켓 {pathBudget}장 안에서 최대{" "}
+                  {pathResult.collected.reduce((a, b) => a + b, 0)}개
+                </strong>
+                {": "}
+                {pathTargets
+                  .map(
+                    (t, i) =>
+                      `${unitKo(t.unit)} ${pathResult.collected[i]}/${t.count}`
+                  )
+                  .join(", ")}
+              </div>
+            )}
+            <strong>
+              {ticketSummary(pathResult.steps, pathResult.tickets)}
+            </strong>
+            {" → "}마지막 위치 {destLabel(pathResult.endIndex)}
+            {pathCharactersRolled(pathResult.steps).length > 0 && (
+              <div>
+                뽑히는 캐릭터:{" "}
+                {pathCharactersRolled(pathResult.steps).map(
+                  ({ unit, count, goal }, i) => (
+                    <React.Fragment key={unit}>
+                      {i > 0 && ", "}
+                      {goal ? (
+                        <strong style={{ color: "#b00020" }}>
+                          {unitKo(unit)} {count}개 (목표 {goal})
+                        </strong>
+                      ) : (
+                        `${unitKo(unit)} ${count}개`
+                      )}
+                    </React.Fragment>
+                  )
+                )}
+              </div>
+            )}
+            {pathResult.checkedUpTo !== undefined && (
+              <div style={{ color: "#b00020" }}>
+                경우의 수가 많아 {pathResult.checkedUpTo}장까지만 끝까지
+                확인했습니다. 그보다 많은 예산에서는 더 좋은 경로가 있을 수
+                있습니다.
+              </div>
+            )}
+            {pathResult.steps.length === 0 && (
+              <div>예산 안에서는 목표 캐릭터를 얻을 수 없습니다.</div>
+            )}
+            <ol style={{ margin: "4px 0 0", paddingLeft: "24px" }}>
+              {pathResult.steps.map((step, i) => (
+                <li key={i}>
+                  {labelFor(step.index, trackCount)}{" "}
+                  {step.banner ? (
+                    <strong
+                      style={{
+                        color:
+                          step.dupeAction === "avoid" ? "#2e7d32" : "#e65100",
+                      }}
+                    >
+                      럭키티켓 단발 (
+                      {step.dupeAction === "avoid" ? "중복 회피" : "열이동"}):{" "}
+                    </strong>
+                  ) : step.kind === "single" ? (
+                    "단발: "
+                  ) : (
+                    `${MULTI_ROLL_NUM}연: `
+                  )}
+                  {step.outcome.results.map((r, j) => (
+                    <React.Fragment key={j}>
+                      {j > 0 && ", "}
+                      <span
+                        style={{
+                          fontWeight: pathTargets.some((t) => t.unit === r.unit)
+                            ? "bold"
+                            : undefined,
+                          color: pathTargets.some((t) => t.unit === r.unit)
+                            ? "#b00020"
+                            : undefined,
+                        }}
+                      >
+                        {r.isMedama ? "특별 아이템" : unitKo(r.unit)}
+                        {r.isGuaranteed ? "(확정)" : r.rerolled ? "(중복)" : ""}
+                      </span>
+                    </React.Fragment>
+                  ))}
+                </li>
+              ))}
+            </ol>
+            <div style={{ color: "#555" }}>
+              표에서 경로가 하이라이트되고, 마지막 위치는 빗금으로 표시됩니다.
+            </div>
+          </div>
+        )}
+      </PathBox>
       <Table cellSpacing={0}>
         <thead>
           <tr>
@@ -870,7 +1406,9 @@ const EventPage = () => {
                       <>
                         {track} 확정 ({multiRollCount}연)
                         <Small>
-                          (남은 {initialState.guaranteedLeft ?? gacha.guaranteed.step}회)
+                          (남은{" "}
+                          {initialState.guaranteedLeft ?? gacha.guaranteed.step}
+                          회)
                         </Small>
                       </>
                     ) : (

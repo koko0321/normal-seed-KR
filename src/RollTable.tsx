@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Roll, advanceSeed, generateAllRolls } from "./utils/seed";
 import TrackTable from "./TrackTable";
 import styled from "@emotion/styled";
 import { getQueryParam } from "./utils/queryParams";
 import { AllBanners } from "./utils/bannerData";
-import { bannerKo, unitKo } from "./utils/i18n";
+import { bannerKo, normalizeLastCat, unitKo } from "./utils/i18n";
+import { NormalPathStep } from "./utils/normalPathFinder";
 
 export type BannerTrackRolls = {
   bannerName: string;
@@ -26,6 +27,11 @@ export const getFindUnits = () =>
 const FIND_COLORS = ["#8e24aa", "#1565c0", "#2e7d32", "#ef6c00", "#c2185b"];
 export const findColor = (findIndex: number) =>
   FIND_COLORS[findIndex % FIND_COLORS.length];
+
+// Background of cells holding a searched item (the outline keeps the item's
+// own color). Light purple, to stand apart from the event page's light green
+// special item cells.
+export const FOUND_FILL = "#e1bee7";
 
 export const cellElementId = (bannerShortName: string, cellId: string) =>
   `cell-${bannerShortName}-${cellId}`;
@@ -63,188 +69,342 @@ const PositionLink = styled.button`
   cursor: pointer;
 `;
 
-const RollTable = () => {
+const NUM_ROLLS_BUFFER = 10;
+
+const RollTable = ({
+  path,
+  findUnits: findUnitsProp,
+}: {
+  path: NormalPathStep[] | null;
+  findUnits?: string[];
+}) => {
   const initialSeed = parseInt(getQueryParam("seed"), 10);
   const numRolls = parseInt(getQueryParam("rolls"), 10);
-  // Buffer so that track switches near the end of numRolls can be processed
-  const NUM_ROLLS_BUFFER = 10;
-  const lastCatFromQueryParams = getQueryParam("lastCat");
-  const [selectedType, selectedSeedStr, selectedBanner] =
-    getQueryParam("selected").split(",");
-  const selectedSeed = parseInt(selectedSeedStr, 10);
+  const bannersParam = getQueryParam("banners");
+  const lastCatFromQueryParams = normalizeLastCat(getQueryParam("lastCat"));
 
-  const allRolls = generateAllRolls(initialSeed, numRolls + NUM_ROLLS_BUFFER);
-  // Augment roll data with dupe track switch data
-  // For this processing we'll identify each cell by its raritySeed
-  allRolls.forEach(({ trackA, trackB }) => {
-    // Find all cells that should dupe track switch
-    const cellsWithDupeTrackSwitches: number[] = [];
-    const findCellsWithDupeTrackSwitches = (lastCat: string, track: Roll[]) => {
-      track.forEach((roll) => {
-        if (roll.unitIfDupe && roll.unitIfDistinct.unitName === lastCat) {
-          cellsWithDupeTrackSwitches.push(roll.raritySeed);
-        }
-        lastCat = roll.unitIfDistinct.unitName;
-      });
-    };
-    findCellsWithDupeTrackSwitches(lastCatFromQueryParams, trackA);
-    findCellsWithDupeTrackSwitches("", trackB);
+  const [selectedParam, setSelectedParam] = useState(() =>
+    getQueryParam("selected")
+  );
 
-    // Process all cells that should dupe track switch
-    cellsWithDupeTrackSwitches.forEach((raritySeed) => {
-      const findCell = (raritySeed: number) =>
-        trackA.find((roll) => roll.raritySeed === raritySeed) ||
-        trackB.find((roll) => roll.raritySeed === raritySeed);
-      const findCellId = (raritySeed: number) => {
-        const trackAIndex = trackA.findIndex(
-          (roll) => roll.raritySeed === raritySeed
-        );
-        if (trackAIndex >= 0) {
-          return `${trackAIndex + 1}A`;
-        }
-        const trackBIndex = trackB.findIndex(
-          (roll) => roll.raritySeed === raritySeed
-        );
-        return `${trackBIndex + 1}B`;
-      };
-
-      let sourceCell = findCell(raritySeed)!;
-      let prevUnit = sourceCell.unitIfDistinct.unitName;
-      while (sourceCell.unitIfDistinct.unitName === prevUnit) {
-        prevUnit = sourceCell.unitIfDupe!.unitName;
-        const destinationRaritySeed = advanceSeed(
-          sourceCell.unitIfDupe!.unitSeed
-        );
-        const destinationCell = findCell(destinationRaritySeed);
-        if (!destinationCell) {
-          break;
-        }
-        sourceCell.dupeInfo = {
-          showDupe: true,
-          targetCellId: findCellId(destinationRaritySeed),
-          targetWillRerollAgain:
-            sourceCell.unitIfDupe!.unitName ===
-            destinationCell.unitIfDistinct.unitName,
-        };
-        sourceCell = destinationCell;
+  const handleSelect = useCallback((clicked: string) => {
+    setSelectedParam((prev) => {
+      const next = prev === clicked ? "" : clicked;
+      const urlParams = new URLSearchParams(window.location.search);
+      if (next) {
+        urlParams.set("selected", next);
+      } else {
+        urlParams.delete("selected");
       }
+      const qs = urlParams.toString();
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`
+      );
+      return next;
     });
-  });
+  }, []);
 
-  // Highlight the next 10 pulls from selected
-  if (selectedType) {
-    const selectedRolls = allRolls.find(
-      ({ bannerShortName }) => bannerShortName === selectedBanner
+  // Memoize base roll generation and dupe track switch calculation
+  const baseAllRolls = useMemo(() => {
+    const generated = generateAllRolls(
+      initialSeed,
+      numRolls + NUM_ROLLS_BUFFER
     );
-    const findCell = (raritySeed: number) =>
-      selectedRolls?.trackA.find((roll) => roll.raritySeed === raritySeed) ||
-      selectedRolls?.trackB.find((roll) => roll.raritySeed === raritySeed);
-    if (selectedRolls) {
-      const startingRoll = findCell(selectedSeed);
+    return generated.map(({ bannerName, bannerShortName, trackA, trackB }) => {
+      // O(1) lookup map by raritySeed
+      const cellBySeed = new Map<
+        number,
+        { roll: Roll; id: string; track: "A" | "B"; index: number }
+      >();
+      trackA.forEach((roll, i) =>
+        cellBySeed.set(roll.raritySeed, {
+          roll,
+          id: `${i + 1}A`,
+          track: "A",
+          index: i,
+        })
+      );
+      trackB.forEach((roll, i) =>
+        cellBySeed.set(roll.raritySeed, {
+          roll,
+          id: `${i + 1}B`,
+          track: "B",
+          index: i,
+        })
+      );
 
-      // Weird edge case where the reroll is somehow removed
-      const selectedRerollButStartingRollHasNone =
-        selectedType === "r" && !startingRoll?.dupeInfo?.showDupe;
+      const cellsWithDupeTrackSwitches: number[] = [];
+      const findCellsWithDupeTrackSwitches = (
+        lastCat: string,
+        track: Roll[]
+      ) => {
+        for (let i = 0; i < track.length; i++) {
+          const roll = track[i];
+          if (roll.unitIfDupe && roll.unitIfDistinct.unitName === lastCat) {
+            cellsWithDupeTrackSwitches.push(roll.raritySeed);
+          }
+          lastCat = roll.unitIfDistinct.unitName;
+        }
+      };
+      findCellsWithDupeTrackSwitches(lastCatFromQueryParams, trackA);
+      findCellsWithDupeTrackSwitches("", trackB);
 
-      if (startingRoll && !selectedRerollButStartingRollHasNone) {
-        // If selectedType = "r", force the unitIfDupe path
-        let prevUnit =
-          selectedType === "c" ? "" : startingRoll.unitIfDistinct.unitName;
-        let currentRoll = startingRoll;
-        for (let i = 0; i < 11; i++) {
-          let destinationRaritySeed = 0;
-          if (
-            currentRoll.unitIfDistinct.unitName === prevUnit &&
-            currentRoll.unitIfDupe
-          ) {
-            // Go down the reroll path
-            currentRoll.highlight = {
-              top: false,
-              bottom: true,
-            };
-            prevUnit = currentRoll.unitIfDupe.unitName;
-            destinationRaritySeed = advanceSeed(
-              currentRoll.unitIfDupe.unitSeed
-            );
-          } else {
-            // Go down the canonical path
-            currentRoll.highlight = {
-              top: true,
-              bottom: !currentRoll.dupeInfo?.showDupe,
-            };
-            prevUnit = currentRoll.unitIfDistinct.unitName;
-            destinationRaritySeed = advanceSeed(
-              currentRoll.unitIfDistinct.unitSeed
-            );
-          }
-          if (i === 10) {
-            currentRoll.highlight.isLast = true;
-          }
-          const destination = findCell(destinationRaritySeed);
-          if (!destination) {
+      cellsWithDupeTrackSwitches.forEach((raritySeed) => {
+        let sourceEntry = cellBySeed.get(raritySeed);
+        if (!sourceEntry) {
+          return;
+        }
+        let sourceCell = sourceEntry.roll;
+        let prevUnit = sourceCell.unitIfDistinct.unitName;
+        while (
+          sourceCell.unitIfDupe?.unitName &&
+          sourceCell.unitIfDistinct.unitName === prevUnit
+        ) {
+          prevUnit = sourceCell.unitIfDupe.unitName;
+          const destinationRaritySeed = advanceSeed(
+            sourceCell.unitIfDupe.unitSeed
+          );
+          const destEntry = cellBySeed.get(destinationRaritySeed);
+          if (!destEntry) {
             break;
           }
-          currentRoll = destination;
+          sourceCell.dupeInfo = {
+            showDupe: true,
+            targetCellId: destEntry.id,
+            targetWillRerollAgain:
+              sourceCell.unitIfDupe.unitName ===
+              destEntry.roll.unitIfDistinct.unitName,
+          };
+          sourceCell = destEntry.roll;
+        }
+      });
+
+      for (let i = 0; i < trackA.length; i++) {
+        const roll = trackA[i];
+        if (roll.unitIfDupe) {
+          roll.dupeTargetCellId = cellBySeed.get(
+            advanceSeed(roll.unitIfDupe.unitSeed)
+          )?.id;
+        }
+      }
+      for (let i = 0; i < trackB.length; i++) {
+        const roll = trackB[i];
+        if (roll.unitIfDupe) {
+          roll.dupeTargetCellId = cellBySeed.get(
+            advanceSeed(roll.unitIfDupe.unitSeed)
+          )?.id;
+        }
+      }
+
+      return { bannerName, bannerShortName, trackA, trackB, cellBySeed };
+    });
+  }, [initialSeed, numRolls, bannersParam, lastCatFromQueryParams]);
+
+  const activeFindUnits = useMemo(
+    () => findUnitsProp ?? getFindUnits(),
+    [findUnitsProp]
+  );
+
+  // Apply overlays (10-pull highlight, optimal path, find items) immutably so
+  // unchanged rows keep their exact Roll object references for React.memo
+  const { trackARolls, trackBRolls, findResults } = useMemo(() => {
+    const banners = baseAllRolls.map(
+      ({ bannerName, bannerShortName, trackA, trackB, cellBySeed }) => ({
+        bannerName,
+        bannerShortName,
+        baseTrackA: trackA,
+        baseTrackB: trackB,
+        trackA: trackA.slice(0, numRolls),
+        trackB: trackB.slice(0, numRolls),
+        clonedA: new Set<number>(),
+        clonedB: new Set<number>(),
+        cellBySeed,
+      })
+    );
+
+    const getMutableRoll = (
+      bObj: (typeof banners)[number],
+      trackLetter: "A" | "B",
+      index: number
+    ): Roll | undefined => {
+      if (index < 0 || index >= numRolls) {
+        return undefined;
+      }
+      if (trackLetter === "A") {
+        if (!bObj.clonedA.has(index)) {
+          bObj.trackA[index] = { ...bObj.trackA[index] };
+          bObj.clonedA.add(index);
+        }
+        return bObj.trackA[index];
+      } else {
+        if (!bObj.clonedB.has(index)) {
+          bObj.trackB[index] = { ...bObj.trackB[index] };
+          bObj.clonedB.add(index);
+        }
+        return bObj.trackB[index];
+      }
+    };
+
+    const bannerByShort = new Map(
+      banners.map((b) => [b.bannerShortName, b] as const)
+    );
+
+    // 1. Highlight the next 10 pulls from selected
+    if (selectedParam) {
+      const [selectedType, selectedSeedStr, selectedBanner] =
+        selectedParam.split(",");
+      const selectedSeed = parseInt(selectedSeedStr, 10);
+      const selectedRolls = bannerByShort.get(selectedBanner);
+      if (selectedRolls) {
+        const startEntry = selectedRolls.cellBySeed.get(selectedSeed);
+        const startingRoll = startEntry?.roll;
+        const selectedRerollButStartingRollHasNone =
+          selectedType === "r" && !startingRoll?.dupeInfo?.showDupe;
+
+        if (
+          startEntry &&
+          startingRoll &&
+          !selectedRerollButStartingRollHasNone
+        ) {
+          let prevUnit =
+            selectedType === "c" ? "" : startingRoll.unitIfDistinct.unitName;
+          let currentEntry = startEntry;
+          for (let i = 0; i < 11; i++) {
+            const currentRoll = currentEntry.roll;
+            const mutable = getMutableRoll(
+              selectedRolls,
+              currentEntry.track,
+              currentEntry.index
+            );
+            let destinationRaritySeed = 0;
+            if (
+              currentRoll.unitIfDistinct.unitName === prevUnit &&
+              currentRoll.unitIfDupe
+            ) {
+              if (mutable) {
+                mutable.highlight = {
+                  top: false,
+                  bottom: true,
+                  isLast: i === 10 ? true : undefined,
+                };
+              }
+              prevUnit = currentRoll.unitIfDupe.unitName;
+              destinationRaritySeed = advanceSeed(
+                currentRoll.unitIfDupe.unitSeed
+              );
+            } else {
+              if (mutable) {
+                mutable.highlight = {
+                  top: true,
+                  bottom: !currentRoll.dupeInfo?.showDupe,
+                  isLast: i === 10 ? true : undefined,
+                };
+              }
+              prevUnit = currentRoll.unitIfDistinct.unitName;
+              destinationRaritySeed = advanceSeed(
+                currentRoll.unitIfDistinct.unitSeed
+              );
+            }
+            const nextEntry = selectedRolls.cellBySeed.get(
+              destinationRaritySeed
+            );
+            if (!nextEntry) {
+              break;
+            }
+            currentEntry = nextEntry;
+          }
         }
       }
     }
-  }
 
-  // Find every position of the items picked in "find" within numRolls, and
-  // mark the half of the cell that shows it
-  const findResults = getFindUnits().map((unitName, findIndex) => {
-    const color = findColor(findIndex);
-    const banners = allRolls
-      .filter(({ bannerShortName }) =>
-        AllBanners.find(
-          (banner) => banner.shortName === bannerShortName
-        )?.pools.some((pool) => pool.units.includes(unitName))
-      )
-      .map(({ bannerName, bannerShortName, trackA, trackB }) => {
-        const positions: FoundPosition[] = [];
-        const scanTrack = (track: Roll[], trackLetter: "A" | "B") => {
-          track.slice(0, numRolls).forEach((roll, i) => {
-            const cellId = `${i + 1}${trackLetter}`;
-            const showDupe = roll.dupeInfo?.showDupe;
-            if (roll.unitIfDistinct.unitName === unitName) {
-              roll.found = {
-                ...roll.found,
-                [showDupe ? "top" : "bottom"]: color,
-              };
-              positions.push({ sequence: i + 1, trackLetter, label: cellId });
-            }
-            if (showDupe && roll.unitIfDupe?.unitName === unitName) {
-              roll.found = { ...roll.found, bottom: color };
-              positions.push({
-                sequence: i + 1,
-                trackLetter,
-                label: `${cellId}R`,
-              });
-            }
-          });
-        };
-        scanTrack(trackA, "A");
-        scanTrack(trackB, "B");
-        positions.sort(
-          (a, b) =>
-            a.sequence - b.sequence ||
-            a.trackLetter.localeCompare(b.trackLetter)
-        );
-        return { bannerName, bannerShortName, positions };
-      });
-    return { unitName, color, banners };
-  });
+    // 2. Mark the pulls of the best path on the half of the cell that shows them
+    path?.forEach((step, i) => {
+      const bObj = bannerByShort.get(step.bannerShortName);
+      if (!bObj) {
+        return;
+      }
+      const mutable = getMutableRoll(bObj, step.track, step.row);
+      if (!mutable) {
+        return;
+      }
+      const half = !step.dupe && mutable.dupeInfo?.showDupe ? "top" : "bottom";
+      mutable.pathStep = { ...mutable.pathStep, [half]: i + 1 };
+    });
 
-  const trackARolls = allRolls.map((roll) => ({
-    bannerName: roll.bannerName,
-    bannerShortName: roll.bannerShortName,
-    track: roll.trackA.slice(0, numRolls),
-  }));
-  const trackBRolls = allRolls.map((roll) => ({
-    bannerName: roll.bannerName,
-    bannerShortName: roll.bannerShortName,
-    track: roll.trackB.slice(0, numRolls),
-  }));
+    // 3. Find every position of the items picked in "find" within numRolls
+    const computedFindResults = activeFindUnits.map((unitName, findIndex) => {
+      const color = findColor(findIndex);
+      const foundBanners = banners
+        .filter(({ bannerShortName }) =>
+          AllBanners.find(
+            (banner) => banner.shortName === bannerShortName
+          )?.pools.some((pool) => pool.units.includes(unitName))
+        )
+        .map((bObj) => {
+          const { bannerName, bannerShortName, baseTrackA, baseTrackB } = bObj;
+          const positions: FoundPosition[] = [];
+          const scanTrack = (baseTrack: Roll[], trackLetter: "A" | "B") => {
+            const limit = Math.min(numRolls, baseTrack.length);
+            for (let i = 0; i < limit; i++) {
+              const roll = baseTrack[i];
+              const cellId = `${i + 1}${trackLetter}`;
+              const showDupe = roll.dupeInfo?.showDupe;
+              if (roll.unitIfDistinct.unitName === unitName) {
+                const mutable = getMutableRoll(bObj, trackLetter, i);
+                if (mutable) {
+                  mutable.found = {
+                    ...mutable.found,
+                    [showDupe ? "top" : "bottom"]: color,
+                  };
+                }
+                positions.push({
+                  sequence: i + 1,
+                  trackLetter,
+                  label: cellId,
+                });
+              }
+              if (showDupe && roll.unitIfDupe?.unitName === unitName) {
+                const mutable = getMutableRoll(bObj, trackLetter, i);
+                if (mutable) {
+                  mutable.found = { ...mutable.found, bottom: color };
+                }
+                positions.push({
+                  sequence: i + 1,
+                  trackLetter,
+                  label: `${cellId}R`,
+                });
+              }
+            }
+          };
+          scanTrack(baseTrackA, "A");
+          scanTrack(baseTrackB, "B");
+          positions.sort(
+            (a, b) =>
+              a.sequence - b.sequence ||
+              a.trackLetter.localeCompare(b.trackLetter)
+          );
+          return { bannerName, bannerShortName, positions };
+        });
+      return { unitName, color, banners: foundBanners };
+    });
+
+    return {
+      trackARolls: banners.map((b) => ({
+        bannerName: b.bannerName,
+        bannerShortName: b.bannerShortName,
+        track: b.trackA,
+      })),
+      trackBRolls: banners.map((b) => ({
+        bannerName: b.bannerName,
+        bannerShortName: b.bannerShortName,
+        track: b.trackB,
+      })),
+      findResults: computedFindResults,
+    };
+  }, [baseAllRolls, numRolls, selectedParam, path, activeFindUnits]);
+
   return (
     <>
       {findResults.length > 0 && (
@@ -291,11 +451,13 @@ const RollTable = () => {
         </FindList>
       )}
       <Container>
-        <TrackTable rolls={trackARolls} track={"A"} />
-        <TrackTable rolls={trackBRolls} track={"B"} />
+        <TrackTable rolls={trackARolls} track={"A"} onSelect={handleSelect} />
+        <TrackTable rolls={trackBRolls} track={"B"} onSelect={handleSelect} />
       </Container>
     </>
   );
 };
 
-export default RollTable;
+// Typing in the page's inputs re-renders the page; the table only changes
+// with the path or findUnits
+export default React.memo(RollTable);
