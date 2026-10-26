@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import RollTable, { Swatch, findColor, getFindUnits } from "./RollTable";
 import styled from "@emotion/styled";
 import { Typography } from "@mui/material";
@@ -22,6 +22,9 @@ const FindChip = styled.span`
 `;
 
 const Page = () => {
+  useEffect(() => {
+    document.title = "냥코뽑기 배열";
+  }, []);
   // We'll just put all our controls here because we're lazy
   const [seedInput, setSeedInput] = useState(getQueryParam("seed"));
   const selectedBanners = getQueryParam("banners").split(",") || [];
@@ -74,6 +77,13 @@ const Page = () => {
       <Typography variant="h4">
         냥코뽑기 배열 <a href="#credits">[크레딧]</a>
       </Typography>
+      <button
+        type="button"
+        style={{ margin: "4px 0" }}
+        onClick={() => (window.location.hash = "#/event")}
+      >
+        이벤트 뽑기로 이동
+      </button>
       <Typography variant="h6">이 도구에 대하여</Typography>
       <ul>
         <li>

@@ -5,6 +5,15 @@ const DEFAULTS = {
   lastCat: "",
   selected: "",
   find: "",
+  // Event gacha page; "" means the event's default
+  ev: "",
+  evSeed: "1",
+  evLast: "",
+  evRolls: "100",
+  evMulti: "10",
+  evGuar: "",
+  evStock: "",
+  evMedama: "",
 };
 
 export const getQueryParam = (key: keyof typeof DEFAULTS): string => {

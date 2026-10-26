@@ -6,6 +6,8 @@ import Page from "./Page";
 import FinderPage from "./FinderPage";
 import CreditsPage from "./CreditsPage";
 import RarePage from "./RarePage";
+import EventPage from "./EventPage";
+import EventFinderPage from "./EventFinderPage";
 import styled from "@emotion/styled";
 
 const router = createHashRouter([
@@ -24,6 +26,14 @@ const router = createHashRouter([
   {
     path: "/rare",
     element: <RarePage />,
+  },
+  {
+    path: "/event",
+    element: <EventPage />,
+  },
+  {
+    path: "/event-finder",
+    element: <EventFinderPage />,
   },
 ]);
 
