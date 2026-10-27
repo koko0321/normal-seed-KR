@@ -310,6 +310,12 @@ const EventPage = () => {
     usedDupe?: boolean;
     isGuaranteedStep?: boolean;
     multiSelected?: boolean;
+    luckyPull?: {
+      unit: string;
+      rerolled: boolean;
+      dest: number;
+      dupeAction?: "create" | "avoid";
+    };
   };
   const highlights = useMemo(() => {
     const highlights = new Map<number, CellHighlight>();
@@ -320,9 +326,15 @@ const EventPage = () => {
       // through, and where it ends
       for (const step of pathResult.steps) {
         if (step.banner) {
+          const r = step.outcome.results[step.outcome.results.length - 1];
           markCell(step.index, {
             inPath: true,
-            usedDupe: true,
+            luckyPull: {
+              unit: r.unit,
+              rerolled: r.rerolled,
+              dest: step.index + step.outcome.consumed,
+              dupeAction: step.dupeAction,
+            },
           });
         } else if (step.kind === "single") {
           markCell(step.index, {
@@ -335,6 +347,8 @@ const EventPage = () => {
             if (r.cellIndex !== undefined) {
               markCell(r.cellIndex, {
                 inPath: true,
+                usedDupe:
+                  highlights.get(r.cellIndex)?.usedDupe || r.rerolled,
                 isGuaranteedStep:
                   highlights.get(r.cellIndex)?.isGuaranteedStep ||
                   r.isGuaranteed,
@@ -656,7 +670,12 @@ const EventPage = () => {
           >
             <div
               style={{
-                opacity: hl?.inPath && !hl.isLanding && hl.usedDupe ? 0.55 : 1,
+                opacity:
+                  hl?.inPath &&
+                  !hl.isLanding &&
+                  (hl.usedDupe || hl.luckyPull)
+                    ? 0.55
+                    : 1,
               }}
             >
               <a href={hrefFor(cell.plain)}>{resultText(cell.plain.outcome)}</a>
@@ -672,6 +691,21 @@ const EventPage = () => {
                   ({resultText(cell.dupe.outcome)} → {destLabel(cell.dupe.dest)}
                   )
                 </a>
+              </div>
+            )}
+            {hl?.luckyPull && (
+              <div
+                style={{
+                  fontWeight: "bold",
+                  color:
+                    hl.luckyPull.dupeAction === "avoid" ? "#1b5e20" : "#bf360c",
+                  fontSize: "0.9em",
+                }}
+              >
+                [럭티{hl.luckyPull.dupeAction === "avoid" ? "·회피" : "·열이동"}]{" "}
+                {unitKo(hl.luckyPull.unit)}
+                {hl.luckyPull.rerolled ? "(중복)" : ""} →{" "}
+                {destLabel(hl.luckyPull.dest)}
               </div>
             )}
             {cell.guaranteed && (

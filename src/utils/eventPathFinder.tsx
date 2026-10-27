@@ -292,7 +292,7 @@ export const findShortestPath = (
         const nextEventRerolls = nextEventOutcome.results.some(
           (r) => r.rerolled
         );
-        if (directRerolls && !nextEventRerolls) {
+        if (directRerolls && !ltRerolls && !nextEventRerolls) {
           dupeAction = "avoid";
         } else if (ltRerolls || nextEventRerolls) {
           dupeAction = "create";
@@ -319,11 +319,8 @@ export const findShortestPath = (
   // tickets still needed, and the first finished node taken is still the
   // cheapest (A* search). Within a priority, nodes with fewer normal tickets
   // go first, so among equally cheap ways the first found uses the fewest.
-  // Priorities are small integers, so lists per priority and normal tickets
-  // work as the queue; normal tickets never go down along a path, so a list
-  // only gets nodes added while it, or an earlier one, is being taken.
   const useEstimate = budget === null;
-  const priority = (node: Node) =>
+  const priority = (node: { tickets: number; collected: number }) =>
     node.tickets + (useEstimate ? counts.missing(node.collected) : 0);
 
   const start: Node = {
@@ -360,8 +357,8 @@ export const findShortestPath = (
       if (!bucket) {
         continue;
       }
-      for (let b = 0; b < bucket.length; b++) {
-        const node = bucket[b];
+      while (bucket.length > 0) {
+        const node = bucket.shift()!;
         if (dominated(node.place, node.collected, node.tickets, node.normal)) {
           continue;
         }
@@ -391,6 +388,9 @@ export const findShortestPath = (
           continue;
         }
 
+        const prevMove = node.move >= 0 ? moves[node.move] : null;
+        let resetNormalLoop = false;
+
         for (let m = 0; m < moves.length; m++) {
           const move = moves[m];
           // Without a guarantee or medamas a multi-pull is the same as singles
@@ -402,11 +402,15 @@ export const findShortestPath = (
             continue;
           }
           if (move.banner) {
+            // Do not chain consecutive normal banner pulls
+            if (prevMove && prevMove.banner) {
+              continue;
+            }
             // Lucky Ticket can be used for either:
             // 1. 열이동 유도 (Track switch creation):
             //    LT itself dupes/rerolls, OR setting lastRoll causes the next event pull to reroll when direct pull wouldn't
             // 2. 중복 회피 (Duplicate avoidance):
-            //    Direct event pull would have duped/rerolled, but pulling LT changes lastRoll so the next event pull avoids the reroll
+            //    Direct event pull would have duped/rerolled, but pulling LT changes lastRoll (without LT itself rerolling) so the next event pull avoids the reroll
             const directOutcome = singlePull(gacha, seeds, index, state);
             const directRerolls = directOutcome.results.some((r) => r.rerolled);
 
@@ -424,7 +428,7 @@ export const findShortestPath = (
 
             const createsDupe =
               ltRerolls || (!directRerolls && nextEventRerolls);
-            const avoidsDupe = directRerolls && !nextEventRerolls;
+            const avoidsDupe = directRerolls && !ltRerolls && !nextEventRerolls;
 
             if (!createsDupe && !avoidsDupe) {
               continue;
@@ -451,6 +455,13 @@ export const findShortestPath = (
             prev: node,
             move: m,
           });
+          if (priority({ tickets, collected }) === p && normal < n) {
+            n = normal - 1;
+            resetNormalLoop = true;
+          }
+        }
+        if (resetNormalLoop) {
+          break;
         }
       }
       byNormal[n] = []; // free memory
