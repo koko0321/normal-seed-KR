@@ -330,16 +330,21 @@ export const findShortestPath = (
     };
   };
 
-  // Nodes are taken in order of priority: event tickets spent, plus (when
-  // every target is required) how many targets are still missing. Each event
-  // ticket gives at most one target and normal banner pulls never give one
-  // (the targets are event characters), so that never overestimates the event
-  // tickets still needed, and the first finished node taken is still the
-  // cheapest (A* search). Within a priority, nodes with fewer normal tickets
-  // go first, so among equally cheap ways the first found uses the fewest.
+  // Nodes are taken in order of priority: total tickets spent (event tickets +
+  // normal banner tickets), plus (when every target is required) how many
+  // targets are still missing. Counting normal tickets ensures that Lucky
+  // Tickets are not used as "free" skips for minor shortcuts, but only when
+  // a track switch is actually beneficial. Within a priority, nodes with fewer
+  // normal tickets go first.
   const useEstimate = budget === null;
-  const priority = (node: { tickets: number; collected: number }) =>
-    node.tickets + (useEstimate ? counts.missing(node.collected) : 0);
+  const priority = (node: {
+    tickets: number;
+    normal: number;
+    collected: number;
+  }) =>
+    node.tickets +
+    node.normal +
+    (useEstimate ? counts.missing(node.collected) : 0);
 
   const start: Node = {
     place: placeOf(startIndex, normalize(startState)),
@@ -359,9 +364,10 @@ export const findShortestPath = (
   let best = start; // budget mode: most targets so far
   let states = 0;
 
-  // Fewer missing, then fewer event tickets, then fewer normal tickets
+  // Fewer missing, then fewer total tickets, then fewer event tickets, then fewer normal tickets
   const better = (a: Node, b: Node) =>
     counts.missing(a.collected) - counts.missing(b.collected) ||
+    a.tickets + a.normal - (b.tickets + b.normal) ||
     a.tickets - b.tickets ||
     a.normal - b.normal;
 
@@ -474,7 +480,7 @@ export const findShortestPath = (
             prev: node,
             move: m,
           });
-          if (priority({ tickets, collected }) === p && normal < n) {
+          if (priority({ tickets, normal, collected }) === p && normal < n) {
             n = normal - 1;
             resetNormalLoop = true;
           }
