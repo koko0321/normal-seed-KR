@@ -273,7 +273,10 @@ const NormalPathPanel = ({
 
   return (
     <Panel>
-      <summary>최적 경로 찾기 (아이템 우선순위)</summary>
+      <summary>
+        최적 경로 찾기 (아이템 우선순위){" "}
+        <span style={{ color: "#e65100", fontWeight: "bold" }}>(베타)</span>
+      </summary>
       <Typography variant="body2" style={{ margin: "4px 0" }}>
         원하는 아이템에 점수나 순위를 주면, 가진 티켓 안에서 그 아이템을 가장
         많이 얻는 뽑기 순서를 찾아 표에{" "}

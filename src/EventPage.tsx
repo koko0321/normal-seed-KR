@@ -1177,7 +1177,9 @@ const EventPage = () => {
           </li>
         </ul>
       )}
-      <Typography variant="h6">최단 경로 찾기</Typography>
+      <Typography variant="h6">
+        최단 경로 찾기 <span style={{ color: "#e65100", fontSize: "0.7em" }}>(베타)</span>
+      </Typography>
       <PathBox>
         <div style={{ marginBottom: "6px", color: "#555" }}>
           원하는 이벤트 캐릭터와 개수를 고르면, 지금 위치(1A)와 설정에서 시작해{" "}
