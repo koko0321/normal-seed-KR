@@ -670,12 +670,7 @@ const EventPage = () => {
           >
             <div
               style={{
-                opacity:
-                  hl?.inPath &&
-                  !hl.isLanding &&
-                  (hl.usedDupe || hl.luckyPull)
-                    ? 0.55
-                    : 1,
+                opacity: hl?.inPath && !hl.isLanding && hl.usedDupe ? 0.55 : 1,
               }}
             >
               <a href={hrefFor(cell.plain)}>{resultText(cell.plain.outcome)}</a>
@@ -702,10 +697,9 @@ const EventPage = () => {
                   fontSize: "0.9em",
                 }}
               >
-                [럭티{hl.luckyPull.dupeAction === "avoid" ? "·회피" : "·열이동"}]{" "}
-                {unitKo(hl.luckyPull.unit)}
-                {hl.luckyPull.rerolled ? "(중복)" : ""} →{" "}
-                {destLabel(hl.luckyPull.dest)}
+                {hl.luckyPull.dupeAction === "avoid"
+                  ? "[럭티 중복 회피]"
+                  : `[럭티 열이동: ${unitKo(hl.luckyPull.unit)} 먼저 뽑기]`}
               </div>
             )}
             {cell.guaranteed && (
@@ -1392,32 +1386,41 @@ const EventPage = () => {
                           step.dupeAction === "avoid" ? "#2e7d32" : "#e65100",
                       }}
                     >
-                      럭키티켓 단발 (
-                      {step.dupeAction === "avoid" ? "중복 회피" : "열이동"}):{" "}
+                      {step.dupeAction === "avoid"
+                        ? "럭키티켓 (중복 회피): "
+                        : "럭키티켓 (열이동 유도): "}
                     </strong>
                   ) : step.kind === "single" ? (
                     "단발: "
                   ) : (
                     `${MULTI_ROLL_NUM}연: `
                   )}
-                  {step.outcome.results.map((r, j) => (
-                    <React.Fragment key={j}>
-                      {j > 0 && ", "}
-                      <span
-                        style={{
-                          fontWeight: pathTargets.some((t) => t.unit === r.unit)
-                            ? "bold"
-                            : undefined,
-                          color: pathTargets.some((t) => t.unit === r.unit)
-                            ? "#b00020"
-                            : undefined,
-                        }}
-                      >
-                        {r.isMedama ? "특별 아이템" : unitKo(r.unit)}
-                        {r.isGuaranteed ? "(확정)" : r.rerolled ? "(중복)" : ""}
-                      </span>
-                    </React.Fragment>
-                  ))}
+                  {step.banner ? (
+                    <span>
+                      {step.dupeAction === "avoid"
+                        ? "다른 아이템 먼저 뽑아서 중복 방지"
+                        : `${unitKo(step.outcome.results[0].unit)} 먼저 뽑아서 ${labelFor(step.index, trackCount)} 중복 열이동`}
+                    </span>
+                  ) : (
+                    step.outcome.results.map((r, j) => (
+                      <React.Fragment key={j}>
+                        {j > 0 && ", "}
+                        <span
+                          style={{
+                            fontWeight: pathTargets.some((t) => t.unit === r.unit)
+                              ? "bold"
+                              : undefined,
+                            color: pathTargets.some((t) => t.unit === r.unit)
+                              ? "#b00020"
+                              : undefined,
+                          }}
+                        >
+                          {r.isMedama ? "특별 아이템" : unitKo(r.unit)}
+                          {r.isGuaranteed ? "(확정)" : r.rerolled ? "(중복)" : ""}
+                        </span>
+                      </React.Fragment>
+                    ))
+                  )}
                 </li>
               ))}
             </ol>

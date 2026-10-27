@@ -539,27 +539,36 @@ const NormalPathPanel = ({
                 <li key={i}>
                   <CellLink
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
+                      const nextStep = result.steps[i + 1];
+                      const targetBanner =
+                        step.bannerShortName === "ev" && nextStep
+                          ? nextStep.bannerShortName
+                          : step.bannerShortName;
                       document
-                        .getElementById(
-                          cellElementId(step.bannerShortName, label)
-                        )
-                        ?.scrollIntoView({ block: "center" })
-                    }
+                        .getElementById(cellElementId(targetBanner, label))
+                        ?.scrollIntoView({ block: "center" });
+                    }}
                   >
                     {label}
                     {step.dupe ? "R" : ""}
                   </CellLink>{" "}
-                  {bannerKo(banner.name)} →{" "}
-                  {target && resultValues[target] ? (
-                    <strong>{unitKo(step.unitName)}</strong>
+                  {step.bannerShortName === "ev" ? (
+                    <span>
+                      <strong>{bannerKo(banner.name)}</strong>:{" "}
+                      {unitKo(step.unitName)} 먼저 뽑기 (다음 {label} 칸 중복 열이동 유도)
+                    </span>
                   ) : (
-                    unitKo(step.unitName)
+                    <>
+                      {bannerKo(banner.name)} →{" "}
+                      {target && resultValues[target] ? (
+                        <strong>{unitKo(step.unitName)}</strong>
+                      ) : (
+                        unitKo(step.unitName)
+                      )}
+                      {step.dupe && " (중복 재추첨)"}
+                    </>
                   )}
-                  {step.dupe &&
-                    (step.bannerShortName === "ev"
-                      ? " (이벤트 중복으로 열이동)"
-                      : " (중복 재추첨)")}
                 </li>
               );
             })}

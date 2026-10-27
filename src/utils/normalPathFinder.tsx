@@ -40,22 +40,26 @@ export const NORMAL_TO_EVENT_ITEM: Record<string, string> = {
   "Sniper the Cat": "スニャイパー",
 };
 
-export const eventGachaToBanner = (gacha: EventGacha): BannerData => {
-  let sum = 0;
-  const rateCumSum = gacha.pools.map((p) => {
-    sum += p.rate;
-    return sum;
-  });
-  return {
+export const eventGachaToBanners = (gacha: EventGacha): BannerData[] => {
+  const units = Array.from(
+    new Set(
+      gacha.pools.flatMap((p) =>
+        p.units.map((u) => EVENT_TO_NORMAL_ITEM[u] || u)
+      )
+    )
+  ).filter((u) => Object.values(EVENT_TO_NORMAL_ITEM).includes(u));
+  return units.map((unit) => ({
     name: gacha.name,
     shortName: "ev",
-    rateCumSum,
-    pools: gacha.pools.map((p) => ({
-      rate: p.rate,
-      units: p.units.map((u) => EVENT_TO_NORMAL_ITEM[u] || u),
-      reroll: p.reroll,
-    })),
-  };
+    rateCumSum: [10000],
+    pools: [
+      {
+        rate: 10000,
+        units: [unit],
+        reroll: false,
+      },
+    ],
+  }));
 };
 
 // Outline of the table cells on the best path
@@ -219,17 +223,17 @@ export const findBestNormalPath = (
   // placed first (index 0) so ties naturally prefer Lucky Ticket over spending
   // Cat Tickets or Lucky Ticket G.
   const ltBanner = AllBanners.find((b) => b.shortName === "lt")!;
-  let eventBanner: BannerData | null = null;
+  let eventBanners: BannerData[] = [];
   if (request.includeEventDupe) {
     const eg =
       EVENT_GACHAS.find((g) => g.key === request.eventGachaKey) ||
       EVENT_GACHAS[0];
-    eventBanner = eventGachaToBanner(eg);
+    eventBanners = eventGachaToBanners(eg);
   }
   const banners = [
     ltBanner,
     ...userBanners.filter((b) => b.shortName !== "lt"),
-    ...(eventBanner ? [eventBanner] : []),
+    ...eventBanners,
   ];
   const ltIndex = 0;
 
@@ -370,6 +374,12 @@ export const findBestNormalPath = (
     EVENT_TO_NORMAL_ITEM[a] === b;
 
   const pull = (p: number, b: number, last: string): PullResult => {
+    if (banners[b].shortName === "ev") {
+      // Event gacha does NOT advance the normal gacha seed index (`end = p`);
+      // it only overwrites `last` with the event item to trigger a dupe on the
+      // current normal gacha cell `p`.
+      return { end: p, unit: banners[b].pools[0].units[0], dupe: false };
+    }
     const canon = canonPull(p, b);
     const pool = bannerPoolAt(p, b);
     if (!isSameUnit(canon.unit, last) || !pool.reroll) {
@@ -402,14 +412,15 @@ export const findBestNormalPath = (
   // Non-lt banners (n, np, cf, ce, ltg) may be pulled if:
   // 1. It yields a priority item (gainOf(unit) !== null), OR
   // 2. It triggers a duplicate reroll (dupe = true, 열이동) to switch tracks
-  // Event gacha banner (ev) can ONLY be pulled to trigger a duplicate reroll (열이동).
+  // Event gacha banner (ev) only sets `last` without advancing `p`, and is only
+  // allowed when `unit` matches a rerollable normal banner's canonical unit at `p`.
   // All flat non-priority progression is filled with Lucky Tickets (lt).
   const isAllowedPull = (b: number, unit: string, dupe: boolean) => {
     if (!unit) {
       return false;
     }
     if (banners[b].shortName === "ev") {
-      return dupe;
+      return false;
     }
     if (b === ltIndex) {
       return true;
@@ -418,6 +429,16 @@ export const findBestNormalPath = (
       return false;
     }
     return dupe || gainOf(unit) !== null;
+  };
+
+  const isAllowedEventPullAt = (p: number, b: number, last: string) => {
+    const unit = banners[b].pools[0].units[0];
+    if (!unit || isSameUnit(unit, last)) {
+      return false;
+    }
+    const uid = idOf(unit);
+    const list = rerollUnitsAtPos[p];
+    return !!list && list.some((item) => item.unitId === uid);
   };
 
   // Tight upper bound on seed position reachable within maxPulls pulls
@@ -594,13 +615,20 @@ export const findBestNormalPath = (
       if (!bucket) {
         continue;
       }
-      for (const [stateKey, state] of bucket) {
+      const entries = Array.from(bucket.entries());
+      for (let eIdx = 0; eIdx < entries.length; eIdx++) {
+        const [stateKey, state] = entries[eIdx];
         if (stPulls[state] >= maxPulls) {
           continue;
         }
         const last = unitNames[Math.floor(stateKey / costSpace)];
         const packedCost = stateKey % costSpace;
+        const prevBanner = stBanner[state];
         for (let b = 0; b < banners.length; b++) {
+          const isEv = banners[b].shortName === "ev";
+          if (isEv && prevBanner >= 0 && banners[prevBanner].shortName === "ev") {
+            continue;
+          }
           const dim = dimOfBanner[b];
           if (
             dim === -2 ||
@@ -609,7 +637,11 @@ export const findBestNormalPath = (
             continue;
           }
           const result = pull(p, b, last);
-          if (!isAllowedPull(b, result.unit, result.dupe)) {
+          if (
+            isEv
+              ? !isAllowedEventPullAt(p, b, last)
+              : !isAllowedPull(b, result.unit, result.dupe)
+          ) {
             continue;
           }
           const nextCost = packedCost + (dim >= 0 ? radix[dim] : 0);
@@ -623,7 +655,7 @@ export const findBestNormalPath = (
             grow();
           }
           const next = count;
-          const unitGain = gain(result.unit);
+          const unitGain = isEv ? null : gain(result.unit);
           for (let r = 0; r < scoreRanks; r++) {
             stScore[next * scoreRanks + r] =
               stScore[state * scoreRanks + r] + (unitGain ? unitGain[r] : 0);
@@ -631,7 +663,7 @@ export const findBestNormalPath = (
           if (penalty) {
             stScore[next * scoreRanks] -= penalty[b];
           }
-          stPulls[next] = stPulls[state] + 1;
+          stPulls[next] = stPulls[state] + (isEv ? 0 : 1);
           stSpecialPulls[next] =
             stSpecialPulls[state] + (b === ltIndex ? 0 : 1);
           stParent[next] = state;
@@ -643,18 +675,31 @@ export const findBestNormalPath = (
             if (!better(next, existing)) {
               continue;
             }
-            // Not expanded yet, so nothing points at it: overwrite in place
-            for (let r = 0; r < scoreRanks; r++) {
-              stScore[existing * scoreRanks + r] =
-                stScore[next * scoreRanks + r];
+            // If it's in the same bucket `p` and already in `entries`, push a new slot so we expand the improved state too
+            if (isEv) {
+              target.set(key, next);
+              entries.push([key, next]);
+              count++;
+              if (count > maxStates) {
+                return null;
+              }
+            } else {
+              // Not expanded yet, so nothing points at it: overwrite in place
+              for (let r = 0; r < scoreRanks; r++) {
+                stScore[existing * scoreRanks + r] =
+                  stScore[next * scoreRanks + r];
+              }
+              stPulls[existing] = stPulls[next];
+              stSpecialPulls[existing] = stSpecialPulls[next];
+              stParent[existing] = state;
+              stBanner[existing] = b;
+              kept = existing;
             }
-            stPulls[existing] = stPulls[next];
-            stSpecialPulls[existing] = stSpecialPulls[next];
-            stParent[existing] = state;
-            stBanner[existing] = b;
-            kept = existing;
           } else {
             target.set(key, next);
+            if (isEv) {
+              entries.push([key, next]);
+            }
             count++;
             if (count > maxStates) {
               return null;
@@ -700,19 +745,23 @@ export const findBestNormalPath = (
     };
     pullBanners.forEach((b) => pushPull(b));
     if (fillRemaining) {
-      while (p < tablePositions && steps.length < maxPulls) {
+      let normalPulls = steps.filter((s) => s.bannerShortName !== "ev").length;
+      while (p < tablePositions && normalPulls < maxPulls) {
         if (!pushPull(ltIndex)) {
           break;
         }
+        normalPulls++;
       }
     }
     return steps;
   };
   const scoreOf = (pullBanners: number[]) => {
     const score = new Array(ranks).fill(0);
-    replay(pullBanners, true).forEach(({ unitName }) =>
-      gainOf(unitName)?.forEach((value, r) => (score[r] += value))
-    );
+    replay(pullBanners, true).forEach(({ bannerShortName, unitName }) => {
+      if (bannerShortName !== "ev") {
+        gainOf(unitName)?.forEach((value, r) => (score[r] += value));
+      }
+    });
     return score;
   };
   const compareScores = (a: number[], b: number[]) => {
@@ -739,9 +788,11 @@ export const findBestNormalPath = (
     const collected: Partial<Record<ItemGroupKey, number>> = {};
     steps.forEach(({ bannerShortName, unitName }) => {
       tickets[TICKET_OF_BANNER[bannerShortName]]++;
-      const group = groupOfUnit(unitName);
-      if (group && gainOf(unitName)) {
-        collected[group] = (collected[group] || 0) + 1;
+      if (bannerShortName !== "ev") {
+        const group = groupOfUnit(unitName);
+        if (group && gainOf(unitName)) {
+          collected[group] = (collected[group] || 0) + 1;
+        }
       }
     });
     return { found: true, steps, tickets, collected, states, approximate };

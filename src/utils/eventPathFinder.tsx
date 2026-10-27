@@ -158,32 +158,66 @@ export const findShortestPath = (
   const targetIndex = new Map(targets.map(({ unit }, i) => [unit, i]));
   const counts = new Counts(targets.map(({ count }) => count));
 
-  const moves: Move[] = [
+  // A normal banner pull does NOT advance the event gacha seed index (their
+  // seeds progress independently). It ONLY shares and overwrites `lastRoll`,
+  // which can either trigger a dupe reroll on the current event cell (`create`)
+  // or clear a pending dupe reroll on the current event cell (`avoid`).
+  //
+  // Any unit in the Lucky Ticket pool can be obtained on the separate normal
+  // gacha track; for simplicity we offer one synthetic move per rerollable
+  // event unit to set `lastRoll = unit` (creates a dupe if the current event
+  // cell rolls `unit`), plus one synthetic move to set `lastRoll = ""` (avoids
+  // a dupe if the current event cell would have duped with `state.lastRoll`).
+  const eventRerollUnits = Array.from(
+    new Set(gacha.pools.filter((p) => p.reroll).flatMap((p) => p.units))
+  );
+  const ltBanner = sharedBanners[0] || null;
+  const moves: (Move & { setLastRoll?: string })[] = [
     { banner: null, kind: "single" },
     { banner: null, kind: "multi" },
-    ...sharedBanners.map((banner) => ({ banner, kind: "single" as const })),
+    ...(ltBanner
+      ? [
+          ...eventRerollUnits.map((unit) => ({
+            banner: ltBanner,
+            kind: "single" as const,
+            setLastRoll: unit,
+          })),
+          {
+            banner: ltBanner,
+            kind: "single" as const,
+            setLastRoll: "",
+          },
+        ]
+      : []),
   ];
   // Event tickets a pull costs; normal banner pulls cost a normal ticket
   const ticketsFor = (move: Move) =>
     move.banner ? 0 : move.kind === "multi" ? multiCount : 1;
 
-  const pull = (move: Move, index: number, state: GachaState): PullOutcome => {
+  const pull = (
+    move: Move & { setLastRoll?: string },
+    index: number,
+    state: GachaState
+  ): PullOutcome => {
     if (!move.banner) {
       return move.kind === "single"
         ? singlePull(gacha, seeds, index, state)
         : multiPull(gacha, seeds, index, state, multiCount);
     }
-    // A normal banner pull only changes the last roll, not the event's
-    // guaranteed or medama counters
-    const outcome = singlePull(move.banner.gacha, seeds, index, {
-      lastRoll: state.lastRoll,
-      guaranteedLeft: null,
-      medamaStock: 0,
-      medamaLeft: null,
-    });
+    const targetLast = move.setLastRoll ?? "";
     return {
-      ...outcome,
-      state: { ...state, lastRoll: outcome.state.lastRoll },
+      results: [
+        {
+          unit: targetLast || "중복 방지용 다른 아이템",
+          pool: 0,
+          isMedama: false,
+          isGuaranteedMedama: false,
+          isGuaranteed: false,
+          rerolled: false,
+        },
+      ],
+      consumed: 0,
+      state: { ...state, lastRoll: targetLast },
     };
   };
 
@@ -280,23 +314,7 @@ export const findShortestPath = (
       const outcome = pull(move, index, state);
       let dupeAction: "create" | "avoid" | undefined = undefined;
       if (move.banner) {
-        const directOutcome = singlePull(gacha, seeds, index, state);
-        const directRerolls = directOutcome.results.some((r) => r.rerolled);
-        const ltRerolls = outcome.results.some((r) => r.rerolled);
-        const nextEventOutcome = singlePull(
-          gacha,
-          seeds,
-          index + outcome.consumed,
-          outcome.state
-        );
-        const nextEventRerolls = nextEventOutcome.results.some(
-          (r) => r.rerolled
-        );
-        if (directRerolls && !ltRerolls && !nextEventRerolls) {
-          dupeAction = "avoid";
-        } else if (ltRerolls || nextEventRerolls) {
-          dupeAction = "create";
-        }
+        dupeAction = move.setLastRoll ? "create" : "avoid";
       }
       state = outcome.state;
       return { ...move, index, outcome, dupeAction };
@@ -406,32 +424,33 @@ export const findShortestPath = (
             if (prevMove && prevMove.banner) {
               continue;
             }
-            // Lucky Ticket can be used for either:
-            // 1. 열이동 유도 (Track switch creation):
-            //    LT itself dupes/rerolls, OR setting lastRoll causes the next event pull to reroll when direct pull wouldn't
-            // 2. 중복 회피 (Duplicate avoidance):
-            //    Direct event pull would have duped/rerolled, but pulling LT changes lastRoll (without LT itself rerolling) so the next event pull avoids the reroll
             const directOutcome = singlePull(gacha, seeds, index, state);
             const directRerolls = directOutcome.results.some((r) => r.rerolled);
 
-            const ltOutcome = pull(move, index, state);
-            const ltRerolls = ltOutcome.results.some((r) => r.rerolled);
-            const nextEventOutcome = singlePull(
-              gacha,
-              seeds,
-              index + ltOutcome.consumed,
-              ltOutcome.state
-            );
-            const nextEventRerolls = nextEventOutcome.results.some(
-              (r) => r.rerolled
-            );
-
-            const createsDupe =
-              ltRerolls || (!directRerolls && nextEventRerolls);
-            const avoidsDupe = directRerolls && !ltRerolls && !nextEventRerolls;
-
-            if (!createsDupe && !avoidsDupe) {
-              continue;
+            if (move.setLastRoll) {
+              // 1. 열이동 유도 (Track switch creation):
+              //    Only valid if current event pull doesn't already reroll,
+              //    and setting lastRoll = move.setLastRoll makes the event pull at `index` reroll
+              if (directRerolls || state.lastRoll === move.setLastRoll) {
+                continue;
+              }
+              const nextEventOutcome = singlePull(gacha, seeds, index, {
+                ...state,
+                lastRoll: move.setLastRoll,
+              });
+              const nextEventRerolls = nextEventOutcome.results.some(
+                (r) => r.rerolled
+              );
+              if (!nextEventRerolls) {
+                continue;
+              }
+            } else {
+              // 2. 중복 회피 (Duplicate avoidance):
+              //    Only valid if current event pull WOULD reroll with `state.lastRoll`,
+              //    and clearing `lastRoll` avoids that reroll
+              if (!directRerolls) {
+                continue;
+              }
             }
           }
           const tickets = node.tickets + ticketsFor(move);
