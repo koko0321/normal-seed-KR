@@ -830,12 +830,17 @@ const EventPage = () => {
     window.location.href = `?${params.toString()}#/event`;
   };
 
-  // Event characters that can be picked as shortest path targets
+  // Event characters that can be picked as shortest path targets, plus the
+  // special item while any is left
   const pathCharacters = [
     ...new Set(
       gacha.pools.filter((p) => p.color === "special").flatMap((p) => p.units)
     ),
+    ...(initialState.medamaStock > 0 ? [MEDAMA] : []),
   ];
+  // Most of one target a path can ask for
+  const maxPathCount = (unit: string) =>
+    unit === MEDAMA ? Math.min(10, initialState.medamaStock) : 10;
   const pathTargets = pathCharacters
     .filter((unit) => (pathCounts[unit] || 0) > 0)
     .map((unit) => ({ unit, count: pathCounts[unit] }));
@@ -1197,7 +1202,10 @@ const EventPage = () => {
                   }))
                 }
               >
-                {Array.from({ length: 11 }, (_, count) => count).map(
+                {Array.from(
+                  { length: maxPathCount(unit) + 1 },
+                  (_, count) => count
+                ).map(
                   (count) => (
                     <option key={count} value={count}>
                       {count}

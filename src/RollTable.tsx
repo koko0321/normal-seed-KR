@@ -331,6 +331,13 @@ const RollTable = ({
       }
       const half = !step.dupe && mutable.dupeInfo?.showDupe ? "top" : "bottom";
       mutable.pathStep = { ...mutable.pathStep, [half]: i + 1 };
+      if (step.isEventDupeSwitch) {
+        mutable.eventDupeInfo = {
+          eventName: "이벤트 뽑기",
+          unitName: step.eventUnitName || "",
+          stepIndex: i,
+        };
+      }
     });
 
     // 3. Find every position of the items picked in "find" within numRolls

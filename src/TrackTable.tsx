@@ -281,6 +281,19 @@ const TrackRowPair = React.memo(
                     {unitKo(unit.unitIfDistinct.unitName)}
                   </a>
                 )}
+                {unit.eventDupeInfo && (
+                  <div
+                    style={{
+                      fontWeight: "bold",
+                      color: "#e65100",
+                      fontSize: "0.85em",
+                      marginTop: "2px",
+                      lineHeight: "1.2",
+                    }}
+                  >
+                    [이벤트뽑 열이동: {unitKo(unit.eventDupeInfo.unitName)} 먼저 뽑기]
+                  </div>
+                )}
               </td>
             );
           })}

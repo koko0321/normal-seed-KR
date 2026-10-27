@@ -40,6 +40,12 @@ export type Roll = {
     top?: string;
     bottom?: string;
   };
+  // Shown when an event gacha pull induces a track switch on this cell
+  eventDupeInfo?: {
+    eventName: string;
+    unitName: string;
+    stepIndex: number;
+  };
 };
 
 export const advanceSeed = (seed: number) => {

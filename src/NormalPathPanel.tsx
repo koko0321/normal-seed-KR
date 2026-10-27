@@ -555,7 +555,9 @@ const NormalPathPanel = ({
                   </CellLink>{" "}
                   {step.bannerShortName === "ev" ? (
                     <span>
-                      <strong>{bannerKo(banner.name)}</strong>:{" "}
+                      <strong style={{ color: "#e65100" }}>
+                        [이벤트뽑 열이동] {bannerKo(banner.name)}:
+                      </strong>{" "}
                       {unitKo(step.unitName)} 먼저 뽑기 (다음 {label} 칸 중복 열이동 유도)
                     </span>
                   ) : (
@@ -566,7 +568,14 @@ const NormalPathPanel = ({
                       ) : (
                         unitKo(step.unitName)
                       )}
-                      {step.dupe && " (중복 재추첨)"}
+                      {step.isEventDupeSwitch ? (
+                        <strong style={{ color: "#e65100" }}>
+                          {" "}
+                          (이벤트뽑 열이동)
+                        </strong>
+                      ) : (
+                        step.dupe && " (중복 재추첨)"
+                      )}
                     </>
                   )}
                 </li>

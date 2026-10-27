@@ -158,6 +158,8 @@ export type NormalPathStep = {
   unitName: string;
   // The previous pull was the same item, so this one was rerolled
   dupe: boolean;
+  isEventDupeSwitch?: boolean;
+  eventUnitName?: string;
 };
 
 export type NormalPathResult =
@@ -743,7 +745,17 @@ export const findBestNormalPath = (
       last = result.unit;
       return true;
     };
-    pullBanners.forEach((b) => pushPull(b));
+    pullBanners.forEach((b) => {
+      const prevStep = steps.length > 0 ? steps[steps.length - 1] : null;
+      const ok = pushPull(b);
+      if (ok && prevStep && prevStep.bannerShortName === "ev") {
+        const curStep = steps[steps.length - 1];
+        if (curStep.dupe) {
+          curStep.isEventDupeSwitch = true;
+          curStep.eventUnitName = prevStep.unitName;
+        }
+      }
+    });
     if (fillRemaining) {
       let normalPulls = steps.filter((s) => s.bannerShortName !== "ev").length;
       while (p < tablePositions && normalPulls < maxPulls) {
