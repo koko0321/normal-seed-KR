@@ -202,6 +202,7 @@ const Page = () => {
           );
         })}
       </div>
+      <NormalPathPanel selectedBanners={selectedBanners} onPath={setPath} />
       <Typography variant="subtitle2" style={{ marginTop: "4px" }}>
         아이템 검색
       </Typography>
@@ -257,7 +258,6 @@ const Page = () => {
           </button>
         )}
       </div>
-      <NormalPathPanel selectedBanners={selectedBanners} onPath={setPath} />
       <RollTable path={path} findUnits={findUnits} />
     </>
   );

@@ -443,8 +443,16 @@ const NormalPathPanel = ({
         없어도 씁니다.
       </Typography>
 
-      <Typography variant="subtitle2">뽑을 수 있는 만큼</Typography>
+      <Typography variant="subtitle2">뽑기 횟수</Typography>
       <Row>
+        <label>
+          <input
+            type="radio"
+            checked={settings.budgetMode === "rows"}
+            onChange={() => update({ budgetMode: "rows" })}
+          />
+          제한 없음 (표 끝까지)
+        </label>
         <label>
           <input
             type="radio"
@@ -460,14 +468,6 @@ const NormalPathPanel = ({
             onChange={() => update({ budgetMode: "total" })}
           />
           총 뽑기 횟수
-        </label>
-        <label>
-          <input
-            type="radio"
-            checked={settings.budgetMode === "rows"}
-            onChange={() => update({ budgetMode: "rows" })}
-          />
-          제한 없음 (표 끝까지)
         </label>
       </Row>
       {settings.budgetMode === "tickets" && (

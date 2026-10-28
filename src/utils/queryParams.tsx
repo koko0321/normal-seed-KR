@@ -1,6 +1,6 @@
 const DEFAULTS = {
   seed: "1",
-  banners: "n,ce,lt",
+  banners: "np,ce,lt,ltg",
   rolls: "100",
   lastCat: "",
   selected: "",
