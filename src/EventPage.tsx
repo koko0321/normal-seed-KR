@@ -12,6 +12,7 @@ import {
 import {
   GachaState,
   PullOutcome,
+  RollResult,
   SeedList,
   medamaActive,
   multiPull,
@@ -180,19 +181,85 @@ const POOL_COLORS: Record<EventPoolColor, string> = {
 };
 const MEDAMA_COLOR = "#b9f6ca";
 
+// Fixed column widths and cell heights, like the 냥코뽑기 table: longer text
+// wraps inside its cell instead of widening the column
+// Height of a cell with 3 tracks (special items left) and with 2
+const CELL_HEIGHT = { 3: 60, 2: 58 } as Record<number, number>;
+const COL_WIDTHS = { label: 44, single: 220, multi: 215 };
 const Table = styled.table`
   border-collapse: collapse;
+  table-layout: fixed;
   td {
     border: 1px solid black;
     text-align: center;
-    white-space: nowrap;
-    padding: 0 6px;
+    padding: 0 4px;
+    line-height: 1.2;
+    font-size: 13px;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
+  /* The page sets its own font on divs; cells use the one above */
+  td > div,
+  td a {
+    font-size: inherit;
+    line-height: inherit;
   }
   th {
     border: 1px solid black;
     font-weight: bold;
   }
 `;
+
+// Step number of the shortest path on a cell
+const StepBadge = styled.span`
+  display: inline-block;
+  min-width: 14px;
+  margin-right: 3px;
+  padding: 0 2px;
+  border-radius: 7px;
+  background: #ff6d00;
+  color: white;
+  font-size: 11px;
+  line-height: 14px;
+  text-align: center;
+`;
+
+const stepBadges = (numbers?: number[]) =>
+  numbers?.map((number) => <StepBadge key={number}>{number}</StepBadge>);
+
+// Order of a roll within a highlighted 10-pull
+const OrderBadge = styled.span`
+  display: inline-block;
+  min-width: 14px;
+  margin-right: 3px;
+  padding: 0 2px;
+  border-radius: 3px;
+  background: #1565c0;
+  color: white;
+  font-size: 11px;
+  line-height: 14px;
+  text-align: center;
+`;
+
+// One roll of a 10-pull, for its order line
+const rollText = (r: RollResult) =>
+  r.isMedama
+    ? r.isGuaranteedMedama
+      ? "특별 아이템(확정)"
+      : "특별 아이템"
+    : `${unitKo(r.unit)}${r.rerolled ? " (중복)" : ""}`;
+
+const orderLines = (rolls?: { order: number; text: string }[]) =>
+  rolls?.map(({ order, text }) => (
+    <div
+      key={order}
+      title={`10연의 ${order}번째`}
+      style={{ fontSize: "11px", color: "#0d47a1", fontWeight: "bold" }}
+    >
+      <OrderBadge>{order}</OrderBadge>
+      {text}
+    </div>
+  ));
 
 const Small = styled.div`
   font-size: 0.75rem !important;
@@ -310,6 +377,12 @@ const EventPage = () => {
     usedDupe?: boolean;
     isGuaranteedStep?: boolean;
     multiSelected?: boolean;
+    // Path step numbers starting here, in the single and 10-pull columns
+    stepNumbers?: number[];
+    multiStepNumbers?: number[];
+    // Which roll(s) of a highlighted 10-pull read this cell (1 to 10), and
+    // what they give: with special items that's not the cell's single pull
+    pullOrder?: { order: number; text: string }[];
     luckyPull?: {
       unit: string;
       rerolled: boolean;
@@ -324,6 +397,16 @@ const EventPage = () => {
     if (pathResult?.found) {
       // The shortest path: every pull's starting cell, the cells a 10-pull goes
       // through, and where it ends
+      pathResult.steps.forEach((step, i) => {
+        const inMultiCol =
+          step.kind === "multi" &&
+          !step.banner &&
+          (!!gacha.guaranteed || medamaActive(gacha, initialState));
+        const key = inMultiCol ? "multiStepNumbers" : "stepNumbers";
+        markCell(step.index, {
+          [key]: [...(highlights.get(step.index)?.[key] || []), i + 1],
+        });
+      });
       for (const step of pathResult.steps) {
         if (step.banner) {
           const r = step.outcome.results[step.outcome.results.length - 1];
@@ -343,12 +426,21 @@ const EventPage = () => {
           });
         } else {
           markCell(step.index, { multiSelected: true });
+          step.outcome.results.forEach((r, order) => {
+            if (r.cellIndex !== undefined) {
+              markCell(r.cellIndex, {
+                pullOrder: [
+                  ...(highlights.get(r.cellIndex)?.pullOrder || []),
+                  { order: order + 1, text: rollText(r) },
+                ],
+              });
+            }
+          });
           for (const r of step.outcome.results) {
             if (r.cellIndex !== undefined) {
               markCell(r.cellIndex, {
                 inPath: true,
-                usedDupe:
-                  highlights.get(r.cellIndex)?.usedDupe || r.rerolled,
+                usedDupe: highlights.get(r.cellIndex)?.usedDupe || r.rerolled,
                 isGuaranteedStep:
                   highlights.get(r.cellIndex)?.isGuaranteedStep ||
                   r.isGuaranteed,
@@ -369,6 +461,18 @@ const EventPage = () => {
           highlights.set(startCell.index, {
             ...highlights.get(startCell.index),
             multiSelected: true,
+          });
+          chosen.outcome.results.forEach((r, order) => {
+            if (r.cellIndex !== undefined) {
+              const prev = highlights.get(r.cellIndex) || {};
+              highlights.set(r.cellIndex, {
+                ...prev,
+                pullOrder: [
+                  ...(prev.pullOrder || []),
+                  { order: order + 1, text: rollText(r) },
+                ],
+              });
+            }
           });
           for (const r of chosen.outcome.results) {
             if (r.cellIndex !== undefined) {
@@ -673,13 +777,16 @@ const EventPage = () => {
                 opacity: hl?.inPath && !hl.isLanding && hl.usedDupe ? 0.55 : 1,
               }}
             >
+              {stepBadges(hl?.stepNumbers)}
               <a href={hrefFor(cell.plain)}>{resultText(cell.plain.outcome)}</a>
               {jumps && ` → ${destLabel(cell.plain.dest)}`}
             </div>
+            {orderLines(hl?.pullOrder)}
             {showDupeLine && cell.dupe && (
               <div
                 style={{
                   fontWeight: hl?.usedDupe ? "bold" : undefined,
+                  fontSize: "11px",
                 }}
               >
                 <a href={hrefFor(cell.dupe)}>
@@ -715,6 +822,8 @@ const EventPage = () => {
             )}
           </td>
         )}
+        {/* Keep the columns lined up where there's no 10-pull */}
+        {hasMultiCol && !cell.multi && <td rowSpan={trackCount} />}
         {hasMultiCol &&
           cell.multi &&
           wrapTooltip(
@@ -759,6 +868,7 @@ const EventPage = () => {
                       : undefined,
                 }}
               >
+                {stepBadges(hl?.multiStepNumbers)}
                 <a href={hrefFor(cell.multi)}>
                   {multiText(cell.multi)} → {destLabel(cell.multi.dest)}
                 </a>
@@ -772,6 +882,7 @@ const EventPage = () => {
                         hl?.multiSelected && selectedPull?.useDupe
                           ? "bold"
                           : undefined,
+                      fontSize: "11px",
                     }}
                   >
                     <a href={hrefFor(cell.multiDupe)}>
@@ -813,7 +924,14 @@ const EventPage = () => {
           );
         }
       }
-      rows.push(<tr key={index}>{tds}</tr>);
+      rows.push(
+        <tr
+          key={index}
+          style={{ height: CELL_HEIGHT[trackCount] / trackCount }}
+        >
+          {tds}
+        </tr>
+      );
     }
     return rows;
     // renderCell reads only these (plus values derived from the URL)
@@ -868,7 +986,9 @@ const EventPage = () => {
 
   // e.g. "이벤트 티켓 13장 (단발 3번 · 10연 1번)"
   const ticketSummary = (steps: PathStep[], tickets: number) => {
-    const singles = steps.filter((s) => !s.banner && s.kind === "single").length;
+    const singles = steps.filter(
+      (s) => !s.banner && s.kind === "single"
+    ).length;
     const multis = steps.filter((s) => !s.banner && s.kind === "multi").length;
     const luckySteps = steps.filter((s) => s.banner);
     const luckyCreates = luckySteps.filter(
@@ -1178,7 +1298,8 @@ const EventPage = () => {
         </ul>
       )}
       <Typography variant="h6">
-        최단 경로 찾기 <span style={{ color: "#e65100", fontSize: "0.7em" }}>(베타)</span>
+        최단 경로 찾기{" "}
+        <span style={{ color: "#e65100", fontSize: "0.7em" }}>(베타)</span>
       </Typography>
       <PathBox>
         <div style={{ marginBottom: "6px", color: "#555" }}>
@@ -1207,13 +1328,11 @@ const EventPage = () => {
                 {Array.from(
                   { length: maxPathCount(unit) + 1 },
                   (_, count) => count
-                ).map(
-                  (count) => (
-                    <option key={count} value={count}>
-                      {count}
-                    </option>
-                  )
-                )}
+                ).map((count) => (
+                  <option key={count} value={count}>
+                    {count}
+                  </option>
+                ))}
               </select>
             </label>
           ))}
@@ -1251,7 +1370,9 @@ const EventPage = () => {
           </label>
         </div>
         <div style={{ marginTop: "6px" }}>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+          <label
+            style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
+          >
             <input
               type="checkbox"
               checked={useLuckyTickets}
@@ -1409,7 +1530,12 @@ const EventPage = () => {
                     <span>
                       {step.dupeAction === "avoid"
                         ? "다른 아이템 먼저 뽑아서 중복 방지"
-                        : `${unitKo(step.outcome.results[0].unit)} 먼저 뽑아서 ${labelFor(step.index, trackCount)} 중복 열이동`}
+                        : `${unitKo(
+                            step.outcome.results[0].unit
+                          )} 먼저 뽑아서 ${labelFor(
+                            step.index,
+                            trackCount
+                          )} 중복 열이동`}
                     </span>
                   ) : (
                     step.outcome.results.map((r, j) => (
@@ -1417,7 +1543,9 @@ const EventPage = () => {
                         {j > 0 && ", "}
                         <span
                           style={{
-                            fontWeight: pathTargets.some((t) => t.unit === r.unit)
+                            fontWeight: pathTargets.some(
+                              (t) => t.unit === r.unit
+                            )
                               ? "bold"
                               : undefined,
                             color: pathTargets.some((t) => t.unit === r.unit)
@@ -1426,7 +1554,11 @@ const EventPage = () => {
                           }}
                         >
                           {r.isMedama ? "특별 아이템" : unitKo(r.unit)}
-                          {r.isGuaranteed ? "(확정)" : r.rerolled ? "(중복)" : ""}
+                          {r.isGuaranteed
+                            ? "(확정)"
+                            : r.rerolled
+                            ? "(중복)"
+                            : ""}
                         </span>
                       </React.Fragment>
                     ))
@@ -1440,7 +1572,25 @@ const EventPage = () => {
           </div>
         )}
       </PathBox>
-      <Table cellSpacing={0}>
+      <Table
+        cellSpacing={0}
+        style={{
+          width:
+            trackCount *
+            (COL_WIDTHS.label +
+              COL_WIDTHS.single +
+              (hasMultiCol ? COL_WIDTHS.multi : 0)),
+        }}
+      >
+        <colgroup>
+          {TRACKS.slice(0, trackCount).map((track) => (
+            <React.Fragment key={track}>
+              <col style={{ width: COL_WIDTHS.label }} />
+              <col style={{ width: COL_WIDTHS.single }} />
+              {hasMultiCol && <col style={{ width: COL_WIDTHS.multi }} />}
+            </React.Fragment>
+          ))}
+        </colgroup>
         <thead>
           <tr>
             {TRACKS.slice(0, trackCount).map((track) => (
