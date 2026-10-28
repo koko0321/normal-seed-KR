@@ -1214,89 +1214,6 @@ const EventPage = () => {
           ))}
         </select>
       </div>
-      <Typography variant="subtitle2">아이템 검색</Typography>
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          gap: "6px",
-          marginBottom: "4px",
-        }}
-      >
-        <select
-          style={{ maxWidth: "300px" }}
-          value=""
-          onChange={(event) => {
-            if (event.target.value) {
-              setQueryParam(
-                "evFind",
-                [...findUnits, event.target.value].join(",")
-              );
-            }
-          }}
-        >
-          <option value="">-- 찾을 아이템 추가 --</option>
-          {findOptions.map((unit) => (
-            <option key={unit} value={unit}>
-              {unit === MEDAMA ? "특별 아이템" : unitKo(unit)}
-            </option>
-          ))}
-        </select>
-        {findUnits.map((unit, findIndex) => (
-          <FindChip key={unit}>
-            <Swatch color={findColor(findIndex)} />
-            {unit === MEDAMA ? "특별 아이템" : unitKo(unit)}
-            <button
-              type="button"
-              title="빼기"
-              onClick={() =>
-                setQueryParam(
-                  "evFind",
-                  findUnits.filter((findUnit) => findUnit !== unit).join(",")
-                )
-              }
-            >
-              ×
-            </button>
-          </FindChip>
-        ))}
-        {findUnits.length > 1 && (
-          <button type="button" onClick={() => setQueryParam("evFind", "")}>
-            모두 지우기
-          </button>
-        )}
-      </div>
-      {findFound.items.length > 0 && (
-        <ul style={{ marginBottom: "8px" }}>
-          {findFound.items.map(
-            ({ unit, color, positions, guaranteedPositions }) => (
-              <li key={unit} style={{ marginBottom: "4px" }}>
-                <Swatch color={color} />
-                <strong>
-                  {unit === MEDAMA ? "특별 아이템" : unitKo(unit)}
-                </strong>
-                {" · "}
-                {positions.length}회
-                {positions.length === 0
-                  ? ` — ${numRolls}번 안에 없습니다.`
-                  : ": "}
-                {renderPositions(positions)}
-                {guaranteedPositions.length > 0 && (
-                  <div style={{ color: "#555" }}>
-                    확정이면 {guaranteedPositions.length}곳:{" "}
-                    {renderPositions(guaranteedPositions)}
-                  </div>
-                )}
-              </li>
-            )
-          )}
-          <li style={{ listStyle: "none", color: "#555" }}>
-            R은 직전 뽑기와 중복되어 재추첨될 때 나오는 경우입니다. 위치를
-            클릭하면 해당 칸으로 이동합니다.
-          </li>
-        </ul>
-      )}
       <Typography variant="h6">
         최단 경로 찾기{" "}
         <span style={{ color: "#e65100", fontSize: "0.7em" }}>(베타)</span>
@@ -1572,6 +1489,89 @@ const EventPage = () => {
           </div>
         )}
       </PathBox>
+      <Typography variant="subtitle2">아이템 검색</Typography>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "6px",
+          marginBottom: "4px",
+        }}
+      >
+        <select
+          style={{ maxWidth: "300px" }}
+          value=""
+          onChange={(event) => {
+            if (event.target.value) {
+              setQueryParam(
+                "evFind",
+                [...findUnits, event.target.value].join(",")
+              );
+            }
+          }}
+        >
+          <option value="">-- 찾을 아이템 추가 --</option>
+          {findOptions.map((unit) => (
+            <option key={unit} value={unit}>
+              {unit === MEDAMA ? "특별 아이템" : unitKo(unit)}
+            </option>
+          ))}
+        </select>
+        {findUnits.map((unit, findIndex) => (
+          <FindChip key={unit}>
+            <Swatch color={findColor(findIndex)} />
+            {unit === MEDAMA ? "특별 아이템" : unitKo(unit)}
+            <button
+              type="button"
+              title="빼기"
+              onClick={() =>
+                setQueryParam(
+                  "evFind",
+                  findUnits.filter((findUnit) => findUnit !== unit).join(",")
+                )
+              }
+            >
+              ×
+            </button>
+          </FindChip>
+        ))}
+        {findUnits.length > 1 && (
+          <button type="button" onClick={() => setQueryParam("evFind", "")}>
+            모두 지우기
+          </button>
+        )}
+      </div>
+      {findFound.items.length > 0 && (
+        <ul style={{ marginBottom: "8px" }}>
+          {findFound.items.map(
+            ({ unit, color, positions, guaranteedPositions }) => (
+              <li key={unit} style={{ marginBottom: "4px" }}>
+                <Swatch color={color} />
+                <strong>
+                  {unit === MEDAMA ? "특별 아이템" : unitKo(unit)}
+                </strong>
+                {" · "}
+                {positions.length}회
+                {positions.length === 0
+                  ? ` — ${numRolls}번 안에 없습니다.`
+                  : ": "}
+                {renderPositions(positions)}
+                {guaranteedPositions.length > 0 && (
+                  <div style={{ color: "#555" }}>
+                    확정이면 {guaranteedPositions.length}곳:{" "}
+                    {renderPositions(guaranteedPositions)}
+                  </div>
+                )}
+              </li>
+            )
+          )}
+          <li style={{ listStyle: "none", color: "#555" }}>
+            R은 직전 뽑기와 중복되어 재추첨될 때 나오는 경우입니다. 위치를
+            클릭하면 해당 칸으로 이동합니다.
+          </li>
+        </ul>
+      )}
       <Table
         cellSpacing={0}
         style={{
