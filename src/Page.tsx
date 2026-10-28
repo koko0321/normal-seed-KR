@@ -75,13 +75,20 @@ const Page = () => {
       <Typography variant="h4">
         냥코뽑기 배열 <a href="#credits">[크레딧]</a>
       </Typography>
-      <button
-        type="button"
-        style={{ margin: "4px 0" }}
-        onClick={() => (window.location.hash = "#/event")}
-      >
-        이벤트 뽑기로 이동
-      </button>
+      <div style={{ display: "flex", gap: "6px", margin: "4px 0" }}>
+        <button
+          type="button"
+          onClick={() => (window.location.hash = "#/event")}
+        >
+          이벤트 뽑기로 이동
+        </button>
+        <button
+          type="button"
+          onClick={() => (window.location.hash = "#/finder")}
+        >
+          냥코뽑기 시드 찾기
+        </button>
+      </div>
       <Typography variant="h6">이 도구에 대하여</Typography>
       <ul>
         <li>
