@@ -55,7 +55,7 @@ export const EVENT_GACHAS: EventGacha[] = [
       superRareItems(3000),
       pool(100, ["XP200万"], "xp"),
     ],
-    medama: { stock: 9, rate: 500, guaranteedSteps: 30 },
+    medama: { stock: 9, rate: 500, guaranteedSteps: 20 },
   },
   {
     key: "revival",
