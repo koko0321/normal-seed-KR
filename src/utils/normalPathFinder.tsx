@@ -5,6 +5,7 @@
 // only grow, so the states are processed in position order like a DP.
 import { AllBanners, BannerData } from "./bannerData";
 import { EVENT_GACHAS, EventGacha } from "./eventData";
+import { GachaState, SeedList, singlePull } from "./eventEngine";
 
 export type ItemGroupKey =
   | "darkCatseye"
@@ -109,7 +110,7 @@ export const ITEM_GROUPS: {
   },
   {
     key: "orbs",
-    label: "파란 구슬 (냥코 대포 공격력~통솔력)",
+    label: "파란구슬",
     matches: (unit) => BLUE_ORBS.includes(unit),
   },
 ];
@@ -151,6 +152,11 @@ export type NormalPathRequest = {
   // What one event pull track switch costs: a rank (order) or points taken
   // off; 0 = free
   eventSwitchValue?: number;
+  // Where the event gacha is now: its own seed and state. Event pulls follow
+  // its real results; only the last one before a normal pull matters.
+  // Without a seed, each switch counts as one pull of the item it needs.
+  eventSeed?: number;
+  eventState?: GachaState;
 };
 
 export type NormalPathStep = {
@@ -161,6 +167,8 @@ export type NormalPathStep = {
   unitName: string;
   // The previous pull was the same item, so this one was rerolled
   dupe: boolean;
+  // Event pulls: how many singles it takes to reach this item
+  eventPulls?: number;
   isEventDupeSwitch?: boolean;
   eventUnitName?: string;
 };
@@ -205,6 +213,9 @@ const unitIndexAfterRemoval = (
 };
 
 type PullResult = { end: number; unit: string; dupe: boolean };
+
+// Event single pulls looked ahead when there's no event ticket count
+const EVENT_CHAIN_MAX = 100;
 
 // Unit name the gain of an event pull is looked up under
 const EVENT_SWITCH = "__eventSwitch";
@@ -268,7 +279,10 @@ export const findBestNormalPath = (
       : request.budgetMode === "tickets"
       ? Math.min(
           request.numRolls,
-          TICKET_TYPES.reduce((sum, type) => sum + ticketLimit(type), 0)
+          TICKET_TYPES.filter((type) => type !== "event").reduce(
+            (sum, type) => sum + ticketLimit(type),
+            0
+          )
         )
       : request.numRolls;
   if (maxPulls <= 0) {
@@ -318,21 +332,100 @@ export const findBestNormalPath = (
   } else if (request.budgetMode === "total") {
     const limit = Math.max(0, Math.floor(request.totalLimit || 0));
     if (limit < request.numRolls) {
-      banners.forEach((_, i) => (bannerDim[i] = 0));
+      banners.forEach((b, i) => {
+        if (b.shortName !== "ev") {
+          bannerDim[i] = 0;
+        }
+      });
       dimLimits.push(limit);
     }
   }
 
+  // Event pulls walk the event gacha's own results, so the count used so far
+  // is where the next one starts: with a known seed, event banners always get
+  // a dimension
+  const eventSeedKnown = request.eventSeed !== undefined;
+  const evBanners = banners
+    .map((b, i) => (b.shortName === "ev" ? i : -1))
+    .filter((i) => i >= 0);
+  let evDim = evBanners.length > 0 ? bannerDim[evBanners[0]] : -1;
+  if (!eventSeedKnown) {
+    evDim = -1;
+  } else if (evBanners.length > 0 && bannerDim[evBanners[0]] !== -2) {
+    if (bannerDim[evBanners[0]] >= 0) {
+      evDim = bannerDim[evBanners[0]];
+    } else {
+      evDim = dimLimits.length;
+      dimLimits.push(
+        request.budgetMode === "tickets"
+          ? Math.min(EVENT_CHAIN_MAX, ticketLimit("event"))
+          : EVENT_CHAIN_MAX
+      );
+      evBanners.forEach((i) => (bannerDim[i] = evDim));
+    }
+  }
+  // evUnits[j]: normal item name of the (j + 1)-th event pull, "" for none.
+  // evFirstAt[b][j]: first index >= j whose item is event banner b's.
+  const evUnits: string[] = [];
+  const evFirstAt = new Map<number, Int32Array>();
+  if (eventSeedKnown && evDim >= 0) {
+    const gacha =
+      EVENT_GACHAS.find((g) => g.key === request.eventGachaKey) ||
+      EVENT_GACHAS[0];
+    const evSeeds = new SeedList(request.eventSeed!);
+    let state: GachaState = request.eventState ?? {
+      lastRoll: "",
+      guaranteedLeft: gacha.guaranteed ? gacha.guaranteed.step : null,
+      medamaStock: gacha.medama ? gacha.medama.stock : 0,
+      medamaLeft: gacha.medama ? gacha.medama.guaranteedSteps : null,
+    };
+    let i = 1;
+    for (let j = 0; j < dimLimits[evDim]; j++) {
+      const outcome = singlePull(gacha, evSeeds, i, state);
+      evUnits.push(EVENT_TO_NORMAL_ITEM[outcome.results[0].unit] || "");
+      i += outcome.consumed;
+      state = outcome.state;
+    }
+    evBanners.forEach((b) => {
+      const unit = banners[b].pools[0].units[0];
+      const firstAt = new Int32Array(evUnits.length + 1).fill(-1);
+      for (let j = evUnits.length - 1; j >= 0; j--) {
+        firstAt[j] = evUnits[j] === unit ? j : firstAt[j + 1];
+      }
+      evFirstAt.set(b, firstAt);
+    });
+  }
+  // Event pulls it takes, from j used so far, to get banner b's item; 0 if
+  // it doesn't come up in time
+  const eventPullsFor = (b: number, j: number) => {
+    if (!eventSeedKnown) {
+      return 1;
+    }
+    const at = evFirstAt.get(b)?.[j] ?? -1;
+    return at < 0 ? 0 : at + 1 - j;
+  };
+
   // Score: one number for points, one count per rank for strict order
   // (compared rank 1 first)
+  // An event pull switch at rank N sits just above the items of rank N, so
+  // only items ranked 1 to N - 1 can pay for it
+  const eventRank =
+    request.scoreMode === "order" && request.includeEventDupe
+      ? request.eventSwitchValue || 0
+      : 0;
+  const maxItemRank = Math.max(
+    0,
+    ...ITEM_GROUPS.map(({ key }) => request.values[key] || 0)
+  );
   const ranks =
     request.scoreMode === "points"
       ? 1
-      : Math.max(
-          0,
-          ...ITEM_GROUPS.map(({ key }) => request.values[key] || 0),
-          request.includeEventDupe ? request.eventSwitchValue || 0 : 0
-        );
+      : eventRank > 0
+      ? Math.max(maxItemRank + 1, eventRank)
+      : maxItemRank;
+  // Score slot of an item rank (or of the event switch)
+  const rankIndex = (rank: number, isEventSwitch = false) =>
+    isEventSwitch || eventRank === 0 || rank < eventRank ? rank - 1 : rank;
   if (
     ranks === 0 ||
     ITEM_GROUPS.every(({ key }) => !(request.values[key] > 0))
@@ -358,7 +451,7 @@ export const findBestNormalPath = (
         if (request.scoreMode === "points") {
           gain[0] = sign * value;
         } else {
-          gain[value - 1] = sign;
+          gain[rankIndex(value, unit === EVENT_SWITCH)] = sign;
         }
       }
       gainCache.set(unit, gain);
@@ -539,7 +632,7 @@ export const findBestNormalPath = (
   // the banner out. penalty (approximate search) is taken off the score per
   // pull.
   const search = (
-    start: { p: number; last: string },
+    start: { p: number; last: string; eventUsed?: number },
     limits: number[],
     dimOfBanner: number[],
     scoreRanks: number,
@@ -589,6 +682,8 @@ export const findBestNormalPath = (
         : new Float64Array(capacity * scoreRanks);
     let stPulls = new Int16Array(capacity);
     let stSpecialPulls = new Int16Array(capacity);
+    // Track switches: dupe rerolls, which event pulls also lead to
+    let stSwitches = new Int16Array(capacity);
     let stParent = new Int32Array(capacity);
     let stBanner = new Int8Array(capacity);
     const grow = () => {
@@ -606,11 +701,13 @@ export const findBestNormalPath = (
       stScore = resize(stScore, scoreRanks);
       stPulls = resize(stPulls, 1);
       stSpecialPulls = resize(stSpecialPulls, 1);
+      stSwitches = resize(stSwitches, 1);
       stParent = resize(stParent, 1);
       stBanner = resize(stBanner, 1);
       capacity *= 2;
     };
-    // Higher score first, then fewer non-Lucky-Ticket pulls, then fewer total pulls
+    // Higher score first, then fewer track switches, then fewer
+    // non-Lucky-Ticket pulls, then fewer total pulls
     const better = (a: number, b: number) => {
       for (let r = 0; r < scoreRanks; r++) {
         const diff =
@@ -618,6 +715,9 @@ export const findBestNormalPath = (
         if (diff !== 0) {
           return diff > 0;
         }
+      }
+      if (stSwitches[a] !== stSwitches[b]) {
+        return stSwitches[a] < stSwitches[b];
       }
       if (stSpecialPulls[a] !== stSpecialPulls[b]) {
         return stSpecialPulls[a] < stSpecialPulls[b];
@@ -638,7 +738,12 @@ export const findBestNormalPath = (
     stParent[0] = -1;
     stBanner[0] = -1;
     let count = 1;
-    bucketAt(start.p).set(effectiveLastId(start.p, start.last, 0) * costSpace, 0);
+    // Event pulls already made decide where the next ones start
+    const startCost = evDim >= 0 ? (start.eventUsed || 0) * radix[evDim] : 0;
+    bucketAt(start.p).set(
+      effectiveLastId(start.p, start.last, startCost) * costSpace + startCost,
+      0
+    );
     let best = 0;
 
     for (let p = start.p; p < positions; p++) {
@@ -668,6 +773,10 @@ export const findBestNormalPath = (
           ) {
             continue;
           }
+          const steps = isEv ? eventPullsFor(b, usedOf(packedCost, dim)) : 1;
+          if (steps === 0) {
+            continue;
+          }
           const result = pull(p, b, last);
           if (
             isEv
@@ -676,7 +785,7 @@ export const findBestNormalPath = (
           ) {
             continue;
           }
-          const nextCost = packedCost + (dim >= 0 ? radix[dim] : 0);
+          const nextCost = packedCost + (dim >= 0 ? steps * radix[dim] : 0);
           const nextLastId = effectiveLastId(result.end, result.unit, nextCost);
           const key = nextLastId * costSpace + nextCost;
           const target = bucketAt(result.end);
@@ -698,6 +807,7 @@ export const findBestNormalPath = (
           stPulls[next] = stPulls[state] + (isEv ? 0 : 1);
           stSpecialPulls[next] =
             stSpecialPulls[state] + (b === ltIndex ? 0 : 1);
+          stSwitches[next] = stSwitches[state] + (result.dupe ? 1 : 0);
           stParent[next] = state;
           stBanner[next] = b;
 
@@ -723,6 +833,7 @@ export const findBestNormalPath = (
               }
               stPulls[existing] = stPulls[next];
               stSpecialPulls[existing] = stSpecialPulls[next];
+              stSwitches[existing] = stSwitches[next];
               stParent[existing] = state;
               stBanner[existing] = b;
               kept = existing;
@@ -759,17 +870,22 @@ export const findBestNormalPath = (
     const steps: NormalPathStep[] = [];
     let p = 0;
     let last = request.lastCat;
+    let eventUsed = 0;
     const pushPull = (b: number) => {
       const result = pull(p, b, last);
       if (!result.unit) {
         return false;
       }
+      const eventPulls =
+        banners[b].shortName === "ev" ? eventPullsFor(b, eventUsed) : 0;
+      eventUsed += eventPulls;
       steps.push({
         bannerShortName: banners[b].shortName,
         row: p >> 1,
         track: p % 2 === 0 ? "A" : "B",
         unitName: result.unit,
         dupe: result.dupe,
+        ...(eventPulls ? { eventPulls } : {}),
       });
       p = result.end;
       last = result.unit;
@@ -791,8 +907,8 @@ export const findBestNormalPath = (
       const left = Object.fromEntries(
         TICKET_TYPES.map((type) => [type, ticketLimit(type)])
       ) as Record<TicketType, number>;
-      steps.forEach(({ bannerShortName }) => {
-        left[TICKET_OF_BANNER[bannerShortName]]--;
+      steps.forEach(({ bannerShortName, eventPulls }) => {
+        left[TICKET_OF_BANNER[bannerShortName]] -= eventPulls || 1;
       });
       while (p < tablePositions) {
         const b = banners.findIndex(
@@ -847,8 +963,8 @@ export const findBestNormalPath = (
       event: 0,
     };
     const collected: Partial<Record<ItemGroupKey, number>> = {};
-    steps.forEach(({ bannerShortName, unitName }) => {
-      tickets[TICKET_OF_BANNER[bannerShortName]]++;
+    steps.forEach(({ bannerShortName, unitName, eventPulls }) => {
+      tickets[TICKET_OF_BANNER[bannerShortName]] += eventPulls || 1;
       if (bannerShortName !== "ev") {
         const group = groupOfUnit(unitName);
         if (group && gainOf(unitName)) {
@@ -859,7 +975,7 @@ export const findBestNormalPath = (
     return { found: true, steps, tickets, collected, states, approximate };
   };
 
-  const root = { p: 0, last: request.lastCat };
+  const root = { p: 0, last: request.lastCat, eventUsed: 0 };
   const exact = search(root, dimLimits, bannerDim, ranks, gainOf, null, MAX_STATES, (p) => {
     if (onProgress && p % 20 === 0) {
       onProgress(p, positions * 2);
@@ -895,7 +1011,7 @@ export const findBestNormalPath = (
       }
       return request.scoreMode === "points"
         ? value
-        : Math.pow(maxPulls + 1, ranks - value);
+        : Math.pow(maxPulls + 1, ranks - 1 - rankIndex(value));
     })
   );
   const prices = dimLimits.map(() => 0);
@@ -903,13 +1019,16 @@ export const findBestNormalPath = (
   let bestScore = new Array(ranks).fill(0);
   let states = 0;
   const relaxedSearch = (
-    start: { p: number; last: string },
+    start: { p: number; last: string; eventUsed: number },
     exhausted: boolean[]
   ) => {
     const result = search(
       start,
-      [],
-      bannerDim.map((dim) => (dim >= 0 && exhausted[dim] ? -2 : -1)),
+      // Only the event pull count is tracked: it decides what they give
+      dimLimits.map((limit, dim) => (dim === evDim ? limit : 0)),
+      bannerDim.map((dim) =>
+        dim >= 0 && exhausted[dim] ? -2 : dim === evDim ? evDim : -1
+      ),
       1,
       weightOf,
       banners.map((_, b) => (bannerDim[b] >= 0 ? prices[bannerDim[b]] : 0)),
@@ -951,10 +1070,15 @@ export const findBestNormalPath = (
           break;
         }
         if (dim >= 0) {
-          used[dim]++;
+          used[dim] +=
+            dim === evDim ? eventPullsFor(plan[i], used[dim]) : 1;
         }
         const result = pull(position.p, plan[i], position.last);
-        position = { p: result.end, last: result.unit };
+        position = {
+          p: result.end,
+          last: result.unit,
+          eventUsed: evDim >= 0 ? used[evDim] : 0,
+        };
         path.push(plan[i]);
       }
       if (cut < 0) {
@@ -987,7 +1111,11 @@ export const findBestNormalPath = (
   const initialWanted = tryPrices();
   for (let pass = 0; pass < APPROXIMATE_PASSES; pass++) {
     dimLimits.forEach((limit, dim) => {
-      if (limit <= 0 || (pass === 0 && initialWanted[dim] <= limit)) {
+      if (
+        limit <= 0 ||
+        dim === evDim ||
+        (pass === 0 && initialWanted[dim] <= limit)
+      ) {
         return;
       }
       let low = 0;

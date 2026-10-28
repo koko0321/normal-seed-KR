@@ -39,6 +39,46 @@ type Settings = {
   // Cost of one event pull track switch, 0 = free
   eventSwitchPoints: number;
   eventSwitchOrder: number;
+  // Where the event gacha is now
+  eventSeedUnknown: boolean;
+  eventSeed: number;
+  eventLast: string;
+  eventStock: number;
+  eventMedamaLeft: number;
+  eventGuarLeft: number;
+};
+
+const urlInt = (
+  key: "evSeed" | "evStock" | "evMedama" | "evGuar",
+  fallback: number
+) => {
+  const value = parseInt(getQueryParam(key), 10);
+  return Number.isNaN(value) ? fallback : value;
+};
+
+// Start of the event gacha, from the URL when it's the same event
+const eventDefaults = (key: string) => {
+  const gacha = EVENT_GACHAS.find((g) => g.key === key) || EVENT_GACHAS[0];
+  const fromUrl = getQueryParam("ev") === gacha.key;
+  return {
+    eventSeed: urlInt("evSeed", 1),
+    eventLast: fromUrl ? getQueryParam("evLast") : "",
+    eventStock: gacha.medama
+      ? fromUrl
+        ? urlInt("evStock", gacha.medama.stock)
+        : gacha.medama.stock
+      : 0,
+    eventMedamaLeft: gacha.medama
+      ? fromUrl
+        ? urlInt("evMedama", gacha.medama.guaranteedSteps)
+        : gacha.medama.guaranteedSteps
+      : 0,
+    eventGuarLeft: gacha.guaranteed
+      ? fromUrl
+        ? urlInt("evGuar", gacha.guaranteed.step)
+        : gacha.guaranteed.step
+      : 0,
+  };
 };
 
 // Each user's own settings stay in their browser
@@ -70,11 +110,15 @@ const defaultSettings = (): Settings => ({
   eventGachaKey: getQueryParam("ev") || EVENT_GACHAS[0].key,
   eventSwitchPoints: 0,
   eventSwitchOrder: 0,
+  eventSeedUnknown: !getQueryParam("evSeed"),
+  ...eventDefaults(getQueryParam("ev") || EVENT_GACHAS[0].key),
 });
 
 const loadSettings = (): Settings => {
   const defaults = defaultSettings();
-  const currentTableBanners = getQueryParam("banners").split(",").filter(Boolean);
+  const currentTableBanners = getQueryParam("banners")
+    .split(",")
+    .filter(Boolean);
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
     if (saved) {
@@ -82,7 +126,9 @@ const loadSettings = (): Settings => {
         ...defaults,
         ...saved,
         banners:
-          currentTableBanners.length > 0 ? currentTableBanners : defaults.banners,
+          currentTableBanners.length > 0
+            ? currentTableBanners
+            : defaults.banners,
         limits: { ...defaults.limits, ...saved.limits },
         points: { ...defaults.points, ...saved.points, darkCatseye: 10 },
         order: { ...defaults.order, ...saved.order, darkCatseye: 1 },
@@ -96,6 +142,70 @@ const loadSettings = (): Settings => {
   }
   return defaults;
 };
+
+const EVENT_SWITCH_KEY = "eventSwitch";
+type RankKey = ItemGroupKey | typeof EVENT_SWITCH_KEY;
+
+const rankLabel = (key: RankKey) =>
+  key === EVENT_SWITCH_KEY
+    ? "이벤트뽑 열이동"
+    : ITEM_GROUPS.find((group) => group.key === key)!.label;
+
+// Ranked keys in order; saved ranks may repeat or skip, so they're only
+// used to sort
+const rankedKeys = (settings: Settings): RankKey[] => {
+  const ranks: [RankKey, number][] = ITEM_GROUPS.map(({ key }) => [
+    key,
+    key === "darkCatseye" ? 1 : settings.order[key] || 0,
+  ]);
+  if (settings.includeEventDupe) {
+    ranks.push([EVENT_SWITCH_KEY, settings.eventSwitchOrder]);
+  }
+  return ranks
+    .filter(([, rank]) => rank > 0)
+    .sort(([keyA, a], [keyB, b]) =>
+      a !== b
+        ? a - b
+        : keyA === "darkCatseye"
+        ? -1
+        : keyB === "darkCatseye"
+        ? 1
+        : 0
+    )
+    .map(([key]) => key);
+};
+
+const rankValues = (ranked: RankKey[]) =>
+  Object.fromEntries(
+    ITEM_GROUPS.map(({ key }) => [key, ranked.indexOf(key) + 1])
+  ) as Record<ItemGroupKey, number>;
+
+const RankList = styled.ol`
+  margin: 4px 0;
+  padding-left: 0;
+  list-style: none;
+  li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 2px 0;
+  }
+  .rank {
+    width: 44px;
+    color: #555;
+  }
+  .name {
+    min-width: 150px;
+  }
+`;
+
+// Event pull and priority settings, grouped
+const SettingsBox = styled.div`
+  margin: 6px 0;
+  padding: 4px 8px;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+`;
 
 const Panel = styled.details`
   margin: 4px 0 8px;
@@ -171,6 +281,8 @@ const NormalPathPanel = ({
   const [resultValues, setResultValues] = useState<
     Record<ItemGroupKey, number>
   >(settings.points);
+  // Whether the shown result was computed without the event seed
+  const [resultEventUnknown, setResultEventUnknown] = useState(false);
   const workerRef = useRef<Worker | null>(null);
 
   useEffect(() => {
@@ -198,6 +310,36 @@ const NormalPathPanel = ({
     settings.banners.map((banner) => TICKET_OF_BANNER[banner])
   );
 
+  const eventGacha =
+    EVENT_GACHAS.find((g) => g.key === settings.eventGachaKey) ||
+    EVENT_GACHAS[0];
+
+  // Strict order as a list: dark catseye stays first, every rank is used once
+  const ranked = rankedKeys(settings);
+  const unranked = (
+    [
+      ...ITEM_GROUPS.map(({ key }) => key),
+      ...(settings.includeEventDupe ? [EVENT_SWITCH_KEY] : []),
+    ] as RankKey[]
+  ).filter((key) => !ranked.includes(key));
+  const setRanked = (list: RankKey[]) =>
+    update({
+      order: Object.fromEntries(
+        ITEM_GROUPS.map(({ key }) => [key, list.indexOf(key) + 1])
+      ) as Record<ItemGroupKey, number>,
+      ...(settings.includeEventDupe
+        ? { eventSwitchOrder: list.indexOf(EVENT_SWITCH_KEY) + 1 }
+        : {}),
+    });
+  const moveRank = (index: number, by: number) => {
+    const list = [...ranked];
+    [list[index], list[index + by]] = [list[index + by], list[index]];
+    setRanked(list);
+  };
+  const removeRank = (index: number) =>
+    setRanked(ranked.filter((_, i) => i !== index));
+  const addRank = (key: RankKey) => setRanked([...ranked, key]);
+
   const stop = () => {
     workerRef.current?.terminate();
     workerRef.current = null;
@@ -207,9 +349,7 @@ const NormalPathPanel = ({
   const start = () => {
     stop();
     const values =
-      settings.scoreMode === "points"
-        ? settings.points
-        : { ...settings.order, darkCatseye: 1 };
+      settings.scoreMode === "points" ? settings.points : rankValues(ranked);
     const request: NormalPathRequest = {
       seed: parseInt(getQueryParam("seed"), 10),
       lastCat: normalizeLastCat(getQueryParam("lastCat")),
@@ -228,7 +368,14 @@ const NormalPathPanel = ({
       eventSwitchValue:
         settings.scoreMode === "points"
           ? settings.eventSwitchPoints
-          : settings.eventSwitchOrder,
+          : ranked.indexOf(EVENT_SWITCH_KEY) + 1,
+      eventSeed: settings.eventSeedUnknown ? undefined : settings.eventSeed,
+      eventState: {
+        lastRoll: settings.eventLast,
+        guaranteedLeft: eventGacha.guaranteed ? settings.eventGuarLeft : null,
+        medamaStock: eventGacha.medama ? settings.eventStock : 0,
+        medamaLeft: eventGacha.medama ? settings.eventMedamaLeft : null,
+      },
     };
     const worker = new Worker(
       new URL("./normalPathFinderWorker.ts", import.meta.url)
@@ -238,6 +385,7 @@ const NormalPathPanel = ({
     setProgress(0);
     setResult(null);
     setResultValues(values);
+    setResultEventUnknown(settings.eventSeedUnknown);
     // The old path stays on the table until the new one is ready: redrawing
     // a big table takes a while
     worker.onmessage = (event) => {
@@ -288,12 +436,11 @@ const NormalPathPanel = ({
       </summary>
       <Typography variant="body2" style={{ margin: "4px 0" }}>
         원하는 아이템에 점수나 순위를 주면, 가진 티켓 안에서 그 아이템을 가장
-        많이 얻는 뽑기 순서를 찾아 표에{" "}
-        <PathSwatch />
+        많이 얻는 뽑기 순서를 찾아 표에 <PathSwatch />
         주황 테두리와 순번으로 표시합니다. 모든 배너가 시드와 마지막 뽑기를
         공유하므로 어느 배너에서 뽑느냐에 따라 다음 칸이 바뀝니다. 설정은 이
-        브라우저에 저장됩니다. 배너는 표에서 선택한 배너를 쓰고, 럭키티켓은
-        표에 없어도 씁니다.
+        브라우저에 저장됩니다. 배너는 표에서 선택한 배너를 쓰고, 럭키티켓은 표에
+        없어도 씁니다.
       </Typography>
 
       <Typography variant="subtitle2">뽑을 수 있는 만큼</Typography>
@@ -363,33 +510,152 @@ const NormalPathPanel = ({
         </Row>
       )}
 
-      <Typography variant="subtitle2">이벤트 뽑기 열이동</Typography>
-      <Row>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
-          <input
-            type="checkbox"
-            checked={settings.includeEventDupe}
-            onChange={(e) => update({ includeEventDupe: e.target.checked })}
-          />
-          이벤트 뽑기로 열이동 포함
-        </label>
-        {settings.includeEventDupe && (
-          <select
-            value={settings.eventGachaKey}
-            onChange={(e) => update({ eventGachaKey: e.target.value })}
-            style={{ maxWidth: "250px" }}
+      <SettingsBox>
+        <Typography variant="subtitle2">이벤트 뽑기 열이동</Typography>
+        <Row>
+          <label
+            style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
           >
-            {EVENT_GACHAS.map((ev) => (
-              <option key={ev.key} value={ev.key}>
-                {eventKo(ev.name)}
-              </option>
-            ))}
-          </select>
+            <input
+              type="checkbox"
+              checked={settings.includeEventDupe}
+              onChange={(e) => update({ includeEventDupe: e.target.checked })}
+            />
+            이벤트 뽑기로 열이동 포함
+          </label>
+          {settings.includeEventDupe && (
+            <select
+              value={settings.eventGachaKey}
+              onChange={(e) =>
+                update({
+                  eventGachaKey: e.target.value,
+                  ...eventDefaults(e.target.value),
+                  eventSeed: settings.eventSeed,
+                })
+              }
+              style={{ maxWidth: "250px" }}
+            >
+              {EVENT_GACHAS.map((ev) => (
+                <option key={ev.key} value={ev.key}>
+                  {eventKo(ev.name)}
+                </option>
+              ))}
+            </select>
+          )}
+        </Row>
+        {settings.includeEventDupe && (
+          <>
+            <Row>
+              <label>
+                이벤트 시드
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  style={{ width: "110px" }}
+                  disabled={settings.eventSeedUnknown}
+                  value={settings.eventSeed}
+                  onChange={(event) =>
+                    update({
+                      eventSeed: parseInt(event.target.value, 10) || 0,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settings.eventSeedUnknown}
+                  onChange={(event) =>
+                    update({ eventSeedUnknown: event.target.checked })
+                  }
+                />
+                모름
+              </label>
+            </Row>
+            {!settings.eventSeedUnknown && (
+              <Row>
+                <label>
+                  마지막 뽑기
+                  <select
+                    value={settings.eventLast}
+                    onChange={(event) =>
+                      update({ eventLast: event.target.value })
+                    }
+                  >
+                    <option value="">모름</option>
+                    {Array.from(
+                      new Set(eventGacha.pools.flatMap((pool) => pool.units))
+                    ).map((unit) => (
+                      <option key={unit} value={unit}>
+                        {unitKo(unit)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {eventGacha.medama && (
+                  <>
+                    <label>
+                      특별 아이템 재고
+                      <select
+                        value={Math.min(
+                          settings.eventStock,
+                          eventGacha.medama.stock
+                        )}
+                        onChange={(event) =>
+                          update({
+                            eventStock: parseInt(event.target.value, 10),
+                          })
+                        }
+                      >
+                        {Array.from(
+                          { length: eventGacha.medama.stock + 1 },
+                          (_, count) => count
+                        ).map((count) => (
+                          <option key={count} value={count}>
+                            {count}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {settings.eventStock > 0 && (
+                      <label>
+                        특별 아이템 확정까지
+                        {numberInput(settings.eventMedamaLeft, (value) =>
+                          update({ eventMedamaLeft: Math.max(1, value) })
+                        )}
+                      </label>
+                    )}
+                  </>
+                )}
+                {eventGacha.guaranteed && (
+                  <label>
+                    확정까지
+                    {numberInput(settings.eventGuarLeft, (value) =>
+                      update({ eventGuarLeft: Math.max(1, value) })
+                    )}
+                  </label>
+                )}
+              </Row>
+            )}
+            <Typography variant="body2" style={{ color: "#555" }}>
+              {settings.eventSeedUnknown
+                ? "이벤트 시드를 모르면, 열이동마다 필요한 아이템이 이벤트 배너에서 나올 때까지 뽑는다고 보고 이벤트 티켓을 1장씩만 셉니다. 실제로는 더 들 수 있습니다."
+                : "이벤트 뽑기는 이 시드에서 실제로 나오는 순서대로 단발로 뽑습니다. 열이동 한 번에 필요한 아이템이 나올 때까지 뽑고, 그 사이 냥코뽑기는 하지 않습니다."}
+            </Typography>
+          </>
         )}
-      </Row>
+      </SettingsBox>
 
       <Typography variant="subtitle2">우선순위</Typography>
       <Row>
+        <label>
+          <input
+            type="radio"
+            checked={settings.scoreMode === "order"}
+            onChange={() => update({ scoreMode: "order" })}
+          />
+          순서 (추천: 1순위를 가장 많이, 같으면 2순위…)
+        </label>
         <label>
           <input
             type="radio"
@@ -398,20 +664,12 @@ const NormalPathPanel = ({
           />
           점수 (점수 합이 가장 큰 경로)
         </label>
-        <label>
-          <input
-            type="radio"
-            checked={settings.scoreMode === "order"}
-            onChange={() => update({ scoreMode: "order" })}
-          />
-          순서 (1순위를 가장 많이, 같으면 2순위…)
-        </label>
       </Row>
-      <Row>
-        {ITEM_GROUPS.map(({ key, label }) => (
-          <label key={key}>
-            {label}
-            {settings.scoreMode === "points" ? (
+      {settings.scoreMode === "points" ? (
+        <Row>
+          {ITEM_GROUPS.map(({ key, label }) => (
+            <label key={key}>
+              {label}
               <select
                 value={settings.points[key]}
                 onChange={(event) =>
@@ -429,33 +687,11 @@ const NormalPathPanel = ({
                   </option>
                 ))}
               </select>
-            ) : (
-              <select
-                value={key === "darkCatseye" ? 1 : settings.order[key]}
-                disabled={key === "darkCatseye"}
-                onChange={(event) =>
-                  update({
-                    order: {
-                      ...settings.order,
-                      [key]: parseInt(event.target.value, 10),
-                    },
-                  })
-                }
-              >
-                {key !== "darkCatseye" && <option value={0}>제외</option>}
-                {ITEM_GROUPS.map((_, rank) => (
-                  <option key={rank} value={rank + 1}>
-                    {rank + 1}순위
-                  </option>
-                ))}
-              </select>
-            )}
-          </label>
-        ))}
-        {settings.includeEventDupe && (
-          <label>
-            이벤트뽑 열이동
-            {settings.scoreMode === "points" ? (
+            </label>
+          ))}
+          {settings.includeEventDupe && (
+            <label>
+              이벤트뽑 열이동
               <select
                 value={settings.eventSwitchPoints}
                 onChange={(event) =>
@@ -471,34 +707,59 @@ const NormalPathPanel = ({
                   </option>
                 ))}
               </select>
-            ) : (
-              <select
-                value={settings.eventSwitchOrder}
-                onChange={(event) =>
-                  update({
-                    eventSwitchOrder: parseInt(event.target.value, 10),
-                  })
-                }
-              >
-                <option value={0}>제한 없음</option>
-                {Array.from(
-                  { length: ITEM_GROUPS.length + 1 },
-                  (_, rank) => rank + 1
-                ).map((rank) => (
-                  <option key={rank} value={rank}>
-                    {rank}순위
-                  </option>
-                ))}
-              </select>
-            )}
-          </label>
-        )}
-      </Row>
+            </label>
+          )}
+        </Row>
+      ) : (
+        <>
+          <RankList>
+            {ranked.map((key, index) => (
+              <li key={key}>
+                <span className="rank">{index + 1}순위</span>
+                <span className="name">{rankLabel(key)}</span>
+                {key !== "darkCatseye" && (
+                  <>
+                    <button
+                      type="button"
+                      title="위로"
+                      disabled={index <= 1}
+                      onClick={() => moveRank(index, -1)}
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      title="아래로"
+                      disabled={index === ranked.length - 1}
+                      onClick={() => moveRank(index, 1)}
+                    >
+                      ▼
+                    </button>
+                    <button type="button" onClick={() => removeRank(index)}>
+                      제외
+                    </button>
+                  </>
+                )}
+              </li>
+            ))}
+          </RankList>
+          {unranked.length > 0 && (
+            <Row>
+              <span style={{ color: "#555" }}>제외됨:</span>
+              {unranked.map((key) => (
+                <button key={key} type="button" onClick={() => addRank(key)}>
+                  + {rankLabel(key)}
+                </button>
+              ))}
+            </Row>
+          )}
+        </>
+      )}
       {settings.includeEventDupe && (
         <Typography variant="body2" style={{ color: "#555" }}>
           {settings.scoreMode === "points"
             ? "이벤트뽑 열이동 한 번마다 이 점수를 빼고 계산합니다. 빼는 점수보다 더 얻을 때만 열이동합니다."
-            : "이벤트뽑 열이동에 순위를 주면, 그보다 높은 순위 아이템을 더 얻을 때만 열이동합니다. 같은 순위 아이템은 열이동 1번당 1개 이상 더 얻어야 합니다."}
+            : "이벤트뽑 열이동은 그보다 위에 있는 아이템을 더 얻을 때만 합니다. 예: 3순위면 1·2순위를 위해서만 합니다. 제외하면 제한 없이 합니다. 결과가 같으면 열이동이 적은 경로를 고릅니다."}
         </Typography>
       )}
 
@@ -535,7 +796,9 @@ const NormalPathPanel = ({
             <strong>
               총 {result.steps.length}번 뽑기 ·{" "}
               {TICKET_TYPES.filter((type) => result.tickets[type] > 0)
-                .map((type) => `${TICKET_LABELS[type]} ${result.tickets[type]}장`)
+                .map(
+                  (type) => `${TICKET_LABELS[type]} ${result.tickets[type]}장`
+                )
                 .join(", ") || "뽑기 없음"}
             </strong>
           </Typography>
@@ -562,12 +825,15 @@ const NormalPathPanel = ({
             {result.steps.map((step, i) => {
               const eventGacha =
                 step.bannerShortName === "ev"
-                  ? EVENT_GACHAS.find((g) => g.key === settings.eventGachaKey) ||
-                    EVENT_GACHAS[0]
+                  ? EVENT_GACHAS.find(
+                      (g) => g.key === settings.eventGachaKey
+                    ) || EVENT_GACHAS[0]
                   : null;
               const banner = eventGacha
                 ? { name: eventGacha.name, shortName: "ev" }
-                : AllBanners.find((b) => b.shortName === step.bannerShortName) || {
+                : AllBanners.find(
+                    (b) => b.shortName === step.bannerShortName
+                  ) || {
                     name: step.bannerShortName,
                     shortName: step.bannerShortName,
                   };
@@ -596,7 +862,14 @@ const NormalPathPanel = ({
                       <strong style={{ color: "#e65100" }}>
                         [이벤트뽑 열이동] {bannerKo(banner.name)}:
                       </strong>{" "}
-                      {unitKo(step.unitName)} 먼저 뽑기 (다음 {label} 칸 중복 열이동 유도)
+                      {resultEventUnknown
+                        ? `이벤트 배너에서 ${unitKo(
+                            step.unitName
+                          )} 나올 때까지 뽑기`
+                        : `이벤트 단발 ${
+                            step.eventPulls || 1
+                          }번, 마지막에 ${unitKo(step.unitName)}`}{" "}
+                      (다음 {label} 칸 중복 열이동 유도)
                     </span>
                   ) : (
                     <>
