@@ -36,6 +36,9 @@ type Settings = {
   order: Record<ItemGroupKey, number>;
   includeEventDupe: boolean;
   eventGachaKey: string;
+  // Cost of one event pull track switch, 0 = free
+  eventSwitchPoints: number;
+  eventSwitchOrder: number;
 };
 
 // Each user's own settings stay in their browser
@@ -65,6 +68,8 @@ const defaultSettings = (): Settings => ({
   },
   includeEventDupe: false,
   eventGachaKey: getQueryParam("ev") || EVENT_GACHAS[0].key,
+  eventSwitchPoints: 0,
+  eventSwitchOrder: 0,
 });
 
 const loadSettings = (): Settings => {
@@ -220,6 +225,10 @@ const NormalPathPanel = ({
       values,
       includeEventDupe: settings.includeEventDupe,
       eventGachaKey: settings.eventGachaKey,
+      eventSwitchValue:
+        settings.scoreMode === "points"
+          ? settings.eventSwitchPoints
+          : settings.eventSwitchOrder,
     };
     const worker = new Worker(
       new URL("./normalPathFinderWorker.ts", import.meta.url)
@@ -283,33 +292,9 @@ const NormalPathPanel = ({
         <PathSwatch />
         주황 테두리와 순번으로 표시합니다. 모든 배너가 시드와 마지막 뽑기를
         공유하므로 어느 배너에서 뽑느냐에 따라 다음 칸이 바뀝니다. 설정은 이
-        브라우저에 저장됩니다.
+        브라우저에 저장됩니다. 배너는 표에서 선택한 배너를 쓰고, 럭키티켓은
+        표에 없어도 씁니다.
       </Typography>
-
-      <Typography variant="subtitle2">사용할 배너</Typography>
-      <Row>
-        {AllBanners.map((banner) => (
-          <label key={banner.shortName}>
-            <input
-              type="checkbox"
-              checked={settings.banners.includes(banner.shortName)}
-              onChange={(event) =>
-                update({
-                  banners: event.target.checked
-                    ? [...settings.banners, banner.shortName]
-                    : settings.banners.filter(
-                        (shortName) => shortName !== banner.shortName
-                      ),
-                })
-              }
-            />
-            {bannerKo(banner.name)}
-            <span style={{ color: "#777" }}>
-              ({TICKET_LABELS[TICKET_OF_BANNER[banner.shortName]]})
-            </span>
-          </label>
-        ))}
-      </Row>
 
       <Typography variant="subtitle2">뽑을 수 있는 만큼</Typography>
       <Row>
@@ -342,14 +327,16 @@ const NormalPathPanel = ({
         <Row>
           {(
             (settings.includeEventDupe
-              ? ["cat", "luckyG", "event"]
-              : ["cat", "luckyG"]) as TicketType[]
+              ? ["cat", "lucky", "luckyG", "event"]
+              : ["cat", "lucky", "luckyG"]) as TicketType[]
           ).map((type) => (
             <label
               key={type}
               style={{
                 opacity:
-                  type === "event" || usedTickets.has(type) ? 1 : 0.4,
+                  type === "event" || type === "lucky" || usedTickets.has(type)
+                    ? 1
+                    : 0.4,
               }}
             >
               {TICKET_LABELS[type]}
@@ -360,7 +347,7 @@ const NormalPathPanel = ({
             </label>
           ))}
           <span style={{ color: "#555" }}>
-            (우선순위 없는 나머지 칸은 럭키티켓으로 자동 채움)
+            (모든 티켓을 다 쓸 때까지만 경로를 표시)
           </span>
         </Row>
       )}
@@ -465,7 +452,55 @@ const NormalPathPanel = ({
             )}
           </label>
         ))}
+        {settings.includeEventDupe && (
+          <label>
+            이벤트뽑 열이동
+            {settings.scoreMode === "points" ? (
+              <select
+                value={settings.eventSwitchPoints}
+                onChange={(event) =>
+                  update({
+                    eventSwitchPoints: parseInt(event.target.value, 10),
+                  })
+                }
+              >
+                <option value={0}>감점 없음</option>
+                {Array.from({ length: 10 }, (_, i) => i + 1).map((value) => (
+                  <option key={value} value={value}>
+                    -{value}점
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select
+                value={settings.eventSwitchOrder}
+                onChange={(event) =>
+                  update({
+                    eventSwitchOrder: parseInt(event.target.value, 10),
+                  })
+                }
+              >
+                <option value={0}>제한 없음</option>
+                {Array.from(
+                  { length: ITEM_GROUPS.length + 1 },
+                  (_, rank) => rank + 1
+                ).map((rank) => (
+                  <option key={rank} value={rank}>
+                    {rank}순위
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
+        )}
       </Row>
+      {settings.includeEventDupe && (
+        <Typography variant="body2" style={{ color: "#555" }}>
+          {settings.scoreMode === "points"
+            ? "이벤트뽑 열이동 한 번마다 이 점수를 빼고 계산합니다. 빼는 점수보다 더 얻을 때만 열이동합니다."
+            : "이벤트뽑 열이동에 순위를 주면, 그보다 높은 순위 아이템을 더 얻을 때만 열이동합니다. 같은 순위 아이템은 열이동 1번당 1개 이상 더 얻어야 합니다."}
+        </Typography>
+      )}
 
       <Row>
         <button type="button" onClick={start}>
@@ -520,7 +555,7 @@ const NormalPathPanel = ({
           {hiddenBanners && hiddenBanners.length > 0 && (
             <Typography variant="body2" style={{ color: "#e65100" }}>
               표에 없는 배너({hiddenBanners.join(", ")})의 칸은 표시되지
-              않습니다. 위 배너 설정에서 체크하면 표에 함께 나옵니다.
+              않습니다. 표 위 배너 선택에서 체크하면 표에 함께 나옵니다.
             </Typography>
           )}
           <Steps>

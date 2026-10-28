@@ -148,6 +148,9 @@ export type NormalPathRequest = {
   values: Record<ItemGroupKey, number>;
   includeEventDupe?: boolean;
   eventGachaKey?: string;
+  // What one event pull track switch costs: a rank (order) or points taken
+  // off; 0 = free
+  eventSwitchValue?: number;
 };
 
 export type NormalPathStep = {
@@ -203,6 +206,9 @@ const unitIndexAfterRemoval = (
 
 type PullResult = { end: number; unit: string; dupe: boolean };
 
+// Unit name the gain of an event pull is looked up under
+const EVENT_SWITCH = "__eventSwitch";
+
 // Beyond this the exact search falls back to the approximate one. Keeps the
 // worker's memory low and finishes quickly.
 const MAX_STATES = 300_000;
@@ -221,8 +227,8 @@ export const findBestNormalPath = (
   if (userBanners.length === 0) {
     return { found: false, reason: "사용할 배너를 하나 이상 고르세요." };
   }
-  // Lucky Ticket (lt) is always available to fill non-priority cells, and is
-  // placed first (index 0) so ties naturally prefer Lucky Ticket over spending
+  // Lucky Ticket (lt) is always available to step over non-priority cells,
+  // and is placed first (index 0) so ties naturally prefer Lucky Ticket over spending
   // Cat Tickets or Lucky Ticket G.
   const ltBanner = AllBanners.find((b) => b.shortName === "lt")!;
   let eventBanners: BannerData[] = [];
@@ -239,14 +245,30 @@ export const findBestNormalPath = (
   ];
   const ltIndex = 0;
 
-  // Maximum number of pulls possible under the chosen budget mode.
-  // Since non-priority cells are always filled with Lucky Tickets (lt),
-  // "tickets" and "rows" modes both cover up to numRolls rows of the table.
+  // Tickets of each type the path may spend: Lucky Tickets always, the others
+  // only when one of their banners is in use
+  const ticketLimit = (type: TicketType) => {
+    if (
+      type !== "lucky" &&
+      !banners.some((b) => TICKET_OF_BANNER[b.shortName] === type)
+    ) {
+      return 0;
+    }
+    const raw = request.limits[type];
+    return Math.max(0, Math.floor(raw !== undefined ? raw : 10));
+  };
+  // Maximum number of pulls possible under the chosen budget mode. With
+  // ticket counts the path ends once every ticket is spent.
   const maxPulls =
     request.budgetMode === "total"
       ? Math.min(
           request.numRolls,
           Math.max(0, Math.floor(request.totalLimit || 0))
+        )
+      : request.budgetMode === "tickets"
+      ? Math.min(
+          request.numRolls,
+          TICKET_TYPES.reduce((sum, type) => sum + ticketLimit(type), 0)
         )
       : request.numRolls;
   if (maxPulls <= 0) {
@@ -271,23 +293,18 @@ export const findBestNormalPath = (
   };
 
   // Cost dimensions: which counter each banner's pull adds to, and its limit.
-  // Lucky Ticket (lt) is never limited so it can fill all remaining cells.
   // A limit that can't run out within the table is dropped.
   const dimLimits: number[] = [];
   const bannerDim: number[] = banners.map(() => -1);
   if (request.budgetMode === "tickets") {
-    (["cat", "luckyG", "event"] as TicketType[]).forEach((type) => {
+    TICKET_TYPES.forEach((type) => {
       const users = banners
         .map((b, i) => (TICKET_OF_BANNER[b.shortName] === type ? i : -1))
         .filter((i) => i >= 0);
       if (users.length === 0) {
         return;
       }
-      const rawLimit = request.limits[type];
-      const limit = Math.max(
-        0,
-        Math.floor(rawLimit !== undefined ? rawLimit : 10)
-      );
+      const limit = ticketLimit(type);
       if (limit <= 0) {
         users.forEach((i) => (bannerDim[i] = -2));
         return;
@@ -311,7 +328,11 @@ export const findBestNormalPath = (
   const ranks =
     request.scoreMode === "points"
       ? 1
-      : Math.max(0, ...ITEM_GROUPS.map(({ key }) => request.values[key] || 0));
+      : Math.max(
+          0,
+          ...ITEM_GROUPS.map(({ key }) => request.values[key] || 0),
+          request.includeEventDupe ? request.eventSwitchValue || 0 : 0
+        );
   if (
     ranks === 0 ||
     ITEM_GROUPS.every(({ key }) => !(request.values[key] > 0))
@@ -324,13 +345,20 @@ export const findBestNormalPath = (
     if (gain === undefined) {
       gain = null;
       const group = groupOfUnit(unit);
-      const value = group ? request.values[group] || 0 : 0;
+      const value =
+        unit === EVENT_SWITCH
+          ? request.eventSwitchValue || 0
+          : group
+          ? request.values[group] || 0
+          : 0;
+      // An event pull switch counts against its rank instead of for it
+      const sign = unit === EVENT_SWITCH ? -1 : 1;
       if (value > 0) {
         gain = new Array(ranks).fill(0);
         if (request.scoreMode === "points") {
-          gain[0] = value;
+          gain[0] = sign * value;
         } else {
-          gain[value - 1] = 1;
+          gain[value - 1] = sign;
         }
       }
       gainCache.set(unit, gain);
@@ -430,7 +458,9 @@ export const findBestNormalPath = (
     if (!selectedSet.has(banners[b].shortName)) {
       return false;
     }
-    return dupe || gainOf(unit) !== null;
+    // Once Lucky Tickets are limited, other tickets may have to step over
+    // cells too
+    return dupe || gainOf(unit) !== null || bannerDim[ltIndex] !== -1;
   };
 
   const isAllowedEventPullAt = (p: number, b: number, last: string) => {
@@ -657,7 +687,7 @@ export const findBestNormalPath = (
             grow();
           }
           const next = count;
-          const unitGain = isEv ? null : gain(result.unit);
+          const unitGain = gain(isEv ? EVENT_SWITCH : result.unit);
           for (let r = 0; r < scoreRanks; r++) {
             stScore[next * scoreRanks + r] =
               stScore[state * scoreRanks + r] + (unitGain ? unitGain[r] : 0);
@@ -756,7 +786,26 @@ export const findBestNormalPath = (
         }
       }
     });
-    if (fillRemaining) {
+    if (fillRemaining && request.budgetMode === "tickets") {
+      // Spend what is left, Lucky Tickets first
+      const left = Object.fromEntries(
+        TICKET_TYPES.map((type) => [type, ticketLimit(type)])
+      ) as Record<TicketType, number>;
+      steps.forEach(({ bannerShortName }) => {
+        left[TICKET_OF_BANNER[bannerShortName]]--;
+      });
+      while (p < tablePositions) {
+        const b = banners.findIndex(
+          (banner) =>
+            banner.shortName !== "ev" &&
+            left[TICKET_OF_BANNER[banner.shortName]] > 0
+        );
+        if (b < 0 || !pushPull(b)) {
+          break;
+        }
+        left[TICKET_OF_BANNER[banners[b].shortName]]--;
+      }
+    } else if (fillRemaining) {
       let normalPulls = steps.filter((s) => s.bannerShortName !== "ev").length;
       while (p < tablePositions && normalPulls < maxPulls) {
         if (!pushPull(ltIndex)) {
@@ -770,9 +819,9 @@ export const findBestNormalPath = (
   const scoreOf = (pullBanners: number[]) => {
     const score = new Array(ranks).fill(0);
     replay(pullBanners, true).forEach(({ bannerShortName, unitName }) => {
-      if (bannerShortName !== "ev") {
-        gainOf(unitName)?.forEach((value, r) => (score[r] += value));
-      }
+      gainOf(
+        bannerShortName === "ev" ? EVENT_SWITCH : unitName
+      )?.forEach((value, r) => (score[r] += value));
     });
     return score;
   };
