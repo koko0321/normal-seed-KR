@@ -132,6 +132,8 @@ const loadSettings = (): Settings => {
         limits: { ...defaults.limits, ...saved.limits },
         points: { ...defaults.points, ...saved.points, darkCatseye: 10 },
         order: { ...defaults.order, ...saved.order, darkCatseye: 1 },
+        // The total pull count option is gone
+        budgetMode: saved.budgetMode === "total" ? "rows" : saved.budgetMode,
         includeEventDupe: saved.includeEventDupe ?? false,
         eventGachaKey:
           saved.eventGachaKey || getQueryParam("ev") || EVENT_GACHAS[0].key,
@@ -461,14 +463,6 @@ const NormalPathPanel = ({
           />
           보유 티켓 수
         </label>
-        <label>
-          <input
-            type="radio"
-            checked={settings.budgetMode === "total"}
-            onChange={() => update({ budgetMode: "total" })}
-          />
-          총 뽑기 횟수
-        </label>
       </Row>
       {settings.budgetMode === "tickets" && (
         <Row>
@@ -496,17 +490,6 @@ const NormalPathPanel = ({
           <span style={{ color: "#555" }}>
             (모든 티켓을 다 쓸 때까지만 경로를 표시)
           </span>
-        </Row>
-      )}
-      {settings.budgetMode === "total" && (
-        <Row>
-          <label>
-            총
-            {numberInput(settings.totalLimit, (value) =>
-              update({ totalLimit: value })
-            )}
-            번
-          </label>
         </Row>
       )}
 
